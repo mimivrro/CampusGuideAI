@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import CampusMap from "./components/CampusMap";
 import VoiceAssistant from "./components/VoiceAssistant";
 import { getRoute, getNearest } from "./services/navigationApi";
+import { API_BASE } from "./config";
 
 const DEFAULT_NODE_ID = "node_1005"; // A-Block Entrance
 
@@ -77,7 +78,7 @@ const QUICK_OPTIONS = [
 async function aiChat(message, currentNodeId) {
   let res;
   try {
-    res = await fetch("/api/ai/chat", {
+    res = await fetch(`${API_BASE}/ai/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, currentNodeId }),

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { getWebSocketUrl } from "../config";
 
 const GEMINI_OUT_RATE = 24000;
 
@@ -29,7 +30,6 @@ function VoiceAssistant({ currentNodeId, onRouteResult, onNavigate, onClose }) {
 
   useEffect(() => {
     mountedRef.current = true;
-    // Auto-start recording on drawer open for seamless mobile UX
     startSession();
     return () => {
       mountedRef.current = false;
@@ -203,8 +203,7 @@ function VoiceAssistant({ currentNodeId, onRouteResult, onNavigate, onClose }) {
     safeSet(setErrorMsg, "");
     safeSet(setLastRoute, null);
 
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/ws/voice?nodeId=${currentNodeId}`;
+    const url = getWebSocketUrl(currentNodeId);
 
     let ws;
     try {
@@ -252,7 +251,7 @@ function VoiceAssistant({ currentNodeId, onRouteResult, onNavigate, onClose }) {
 
     ws.onerror = () => {
       if (!mountedRef.current) return;
-      safeSet(setErrorMsg, "WebSocket error. Ensure backend server is running on port 5000.");
+      safeSet(setErrorMsg, "WebSocket connection error. Is backend Render service online?");
       safeSet(setStatus, STATUS.ERROR);
     };
 
@@ -349,7 +348,7 @@ function VoiceAssistant({ currentNodeId, onRouteResult, onNavigate, onClose }) {
         {status === STATUS.ERROR && errorMsg && (
           <div className="drawer-error-box">
             {errorMsg.includes("GEMINI_API_KEY") || errorMsg.includes("not configured")
-              ? "Configure GEMINI_API_KEY in server/.env and restart backend server."
+              ? "Configure GEMINI_API_KEY in server environment settings on Render."
               : errorMsg}
           </div>
         )}

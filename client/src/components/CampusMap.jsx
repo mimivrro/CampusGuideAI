@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from "react";
+import { API_BASE } from "../config";
 
-// Node type color palette tuned for dark mode
+// Node type color palette tuned for dark & warm paper mode
 const TYPE_COLOR = {
   classroom:       "#3b82f6", // Blue
   lab:             "#8b5cf6", // Purple
@@ -41,7 +42,7 @@ function CampusMap({ routeResult, startNode }) {
 
   useEffect(() => {
     setGLoading(true);
-    fetch("/api/navigation/graph")
+    fetch(`${API_BASE}/navigation/graph`)
       .then((r) => r.json())
       .then((d) => {
         if (d.success) { setGraphData(d); setGError(null); }
@@ -152,7 +153,7 @@ function CampusMap({ routeResult, startNode }) {
         </div>
         <div className="graph-area" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 380 }}>
           <div style={{ textAlign: "center", color: "var(--text-muted)", fontSize: 14 }}>
-            <p>Make sure the backend server is active on port 5000.</p>
+            <p>Ensure backend API service is running.</p>
           </div>
         </div>
       </div>
@@ -284,7 +285,7 @@ function CampusMap({ routeResult, startNode }) {
               <line
                 key={`bg-${i}`}
                 x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
-                stroke="#1e293b" strokeWidth="3.5" strokeLinecap="round"
+                stroke="var(--graph-edge)" strokeWidth="3.5" strokeLinecap="round"
               />
             );
           })}
@@ -346,10 +347,10 @@ function CampusMap({ routeResult, startNode }) {
                     textAnchor="middle"
                     fontSize={isCurrentPos || id === destination?.nodeId ? 24 : 18}
                     fontWeight={isCurrentPos || id === destination?.nodeId ? "700" : "500"}
-                    fill={isCurrentPos ? "#38bdf8" : id === destination?.nodeId ? "#f43f5e" : "#e2e8f0"}
+                    fill={isCurrentPos ? "#38bdf8" : id === destination?.nodeId ? "#f43f5e" : "var(--text-secondary)"}
                     fontFamily="Inter, system-ui, sans-serif"
                     paintOrder="stroke"
-                    stroke="#040711" strokeWidth="6"
+                    stroke="var(--graph-text-stroke)" strokeWidth="6"
                   >
                     {node.label}
                   </text>

@@ -2,14 +2,10 @@
  * navigationApi.js
  *
  * Frontend API client for the CampusGuide navigation backend.
- * All requests go to /api (proxied by Vite to http://localhost:5000).
- *
- * The currentNodeId represents the user's current location.
- * For now this is simulated as a fixed node (node_1005 = A-Block Entrance).
- * Future: update currentNodeId from accelerometer / step detection / BLE.
+ * Uses API_BASE from config.js (supports local Vite proxy and Render production URL).
  */
 
-const API_BASE = '/api';
+import { API_BASE } from '../config.js';
 
 /**
  * Safe JSON parser — never throws on empty or non-JSON responses.
@@ -41,7 +37,7 @@ export async function getRoute(startNodeId, destinationQuery) {
       body: JSON.stringify({ startNodeId, destinationQuery }),
     });
   } catch (networkErr) {
-    throw new Error('Cannot reach the navigation server. Is it running?');
+    throw new Error('Cannot reach the navigation server. Is backend service active?');
   }
 
   const data = await safeJson(res);
@@ -75,7 +71,7 @@ export async function getNearest(type, startNodeId) {
       body: JSON.stringify({ type, startNodeId }),
     });
   } catch (networkErr) {
-    throw new Error('Cannot reach the navigation server. Is it running?');
+    throw new Error('Cannot reach the navigation server. Is backend service active?');
   }
 
   const data = await safeJson(res);
