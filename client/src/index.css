@@ -245,6 +245,15 @@ button {
   justify-content: center;
   color: var(--primary-blue);
   box-shadow: 0 0 20px var(--primary-glow);
+  overflow: hidden;
+  padding: 4px;
+}
+
+.brand-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
 }
 
 .brand-title {
