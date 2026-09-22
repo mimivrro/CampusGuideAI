@@ -106,3 +106,38 @@ export async function searchLocations(query) {
     return { success: false, results: [] };
   }
 }
+
+/**
+ * Request up to 3 shortest loopless alternative routes from startNodeId to a destination.
+ *
+ * @param {string} startNodeId      - Current location node (e.g. "node_1005")
+ * @param {string} destinationQuery - Room label, node ID, category, or semantic query
+ * @returns {Promise<{ success: boolean, paths: Array }>}
+ */
+export async function getAlternatives(startNodeId, destinationQuery) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/navigation/alternatives`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startNodeId, destinationQuery }),
+    });
+  } catch {
+    throw new Error('Cannot reach the navigation server. Is backend service active?');
+  }
+
+  const data = await safeJson(res);
+
+  if (!res.ok) {
+    throw new Error(
+      data?.error || `Alternatives request failed (HTTP ${res.status})`
+    );
+  }
+
+  if (!data) {
+    throw new Error('Server returned an empty response. Please try again.');
+  }
+
+  return data;
+}
+

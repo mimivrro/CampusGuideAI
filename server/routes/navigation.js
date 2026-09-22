@@ -24,6 +24,7 @@ import {
   getNodeDetails,
   searchNodes,
 } from '../services/navigationService.js';
+import { calculateAlternativeRoutes } from '../services/kShortestPaths.js';
 import { nodes, edges } from '../data/buildingData.js';
 import { navigationLimiter } from '../middleware/rateLimiter.js';
 
@@ -64,6 +65,35 @@ router.post(
 
     const { startNodeId, destinationQuery } = req.body;
     const result = calculateRoute(startNodeId, destinationQuery);
+
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(404).json(result);
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/navigation/alternatives
+// ---------------------------------------------------------------------------
+router.post(
+  '/alternatives',
+  [
+    body('startNodeId')
+      .isString().withMessage('startNodeId must be a string')
+      .matches(/^node_\d+$/).withMessage('startNodeId must match pattern node_XXXX')
+      .trim(),
+    body('destinationQuery')
+      .isString().withMessage('destinationQuery must be a string')
+      .isLength({ min: 1, max: 200 }).withMessage('destinationQuery must be 1–200 characters')
+      .trim(),
+  ],
+  (req, res) => {
+    if (!validate(req, res)) return;
+
+    const { startNodeId, destinationQuery } = req.body;
+    const result = calculateAlternativeRoutes(startNodeId, destinationQuery);
 
     if (result.success) {
       res.json(result);

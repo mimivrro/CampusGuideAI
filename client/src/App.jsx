@@ -99,9 +99,27 @@ async function aiChat(message, currentNodeId) {
   return data;
 }
 
+function formatTimeAndSteps(steps, timeSeconds) {
+  const safeSteps = Math.round(steps ?? 0);
+  const totalSec = Math.max(0, Math.round(timeSeconds ?? 0));
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+
+  let timeStr = "";
+  if (mins > 0 && secs > 0) {
+    timeStr = `${mins} min ${secs} s`;
+  } else if (mins > 0) {
+    timeStr = `${mins} min`;
+  } else {
+    timeStr = `${secs} s`;
+  }
+  return `≈ ${safeSteps} steps · ${timeStr}`;
+}
+
 function App() {
   const [currentNodeId, setCurrentNodeId] = useState(DEFAULT_NODE_ID);
   const [routeResult, setRouteResult] = useState(null);
+  const [alternativePaths, setAlternativePaths] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -139,11 +157,35 @@ function App() {
     }
   }, [themeMode]);
 
+  const fetchAndSetAlternatives = useCallback(async (startId, destId, initialRoute) => {
+    if (!startId || !destId) return;
+    try {
+      const res = await fetch(`${API_BASE}/navigation/alternatives`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startNodeId: startId, destinationQuery: destId }),
+      });
+      const data = await res.json();
+      if (data.success && data.paths && data.paths.length > 0) {
+        setAlternativePaths(data.paths);
+        setRouteResult(data.paths[0]); // Shortest selected by default
+      } else if (initialRoute) {
+        setAlternativePaths([initialRoute]);
+      }
+    } catch (err) {
+      console.warn("Could not fetch alternatives:", err);
+      if (initialRoute) {
+        setAlternativePaths([initialRoute]);
+      }
+    }
+  }, []);
+
   const navigate = useCallback(async (destinationQuery) => {
     if (!destinationQuery.trim()) return;
     setIsLoading(true);
     setError(null);
     setResponse("");
+    setAlternativePaths([]);
 
     try {
       let result;
@@ -158,34 +200,55 @@ function App() {
         `Destination found: **${result.destination.label || result.destination.type}** (${result.estimatedMinutes} min walk, ${result.distance} units).` +
         (result.landmarks.length ? ` Landmarks on path: ${result.landmarks.join(", ")}.` : "")
       );
+
+      if (result?.route?.[0]?.nodeId && result?.destination?.nodeId) {
+        await fetchAndSetAlternatives(result.route[0].nodeId, result.destination.nodeId, result);
+      }
     } catch (err) {
       const msg = err.message || "Navigation failed.";
       setError(msg);
       setResponse(msg);
       setRouteResult(null);
+      setAlternativePaths([]);
     } finally {
       setIsLoading(false);
     }
-  }, [currentNodeId]);
+  }, [currentNodeId, fetchAndSetAlternatives]);
 
   const askAI = useCallback(async (message) => {
     if (!message.trim()) return;
     setIsLoading(true);
     setError(null);
     setResponse("");
+    setAlternativePaths([]);
 
     try {
       const data = await aiChat(message, currentNodeId);
-      if (data.routeResult) setRouteResult(data.routeResult);
+      if (data.routeResult) {
+        setRouteResult(data.routeResult);
+        if (data.routeResult.route?.[0]?.nodeId && data.routeResult.destination?.nodeId) {
+          await fetchAndSetAlternatives(
+            data.routeResult.route[0].nodeId,
+            data.routeResult.destination.nodeId,
+            data.routeResult
+          );
+        }
+      }
       setResponse(data.reply || "Route calculated successfully.");
     } catch (err) {
-      const msg = err.message || "AI request failed.";
-      setError(msg);
-      setResponse(msg);
+      // If AI is unavailable (e.g. Gemini key not configured), fall back to direct navigation
+      try {
+        await navigate(message);
+      } catch {
+        const msg = err.message || "AI request failed.";
+        setError(msg);
+        setResponse(msg);
+        setAlternativePaths([]);
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [currentNodeId]);
+  }, [currentNodeId, fetchAndSetAlternatives, navigate]);
 
   const handleSend = () => {
     const q = question.trim();
@@ -418,6 +481,53 @@ function App() {
           </div>
         )}
 
+        {/* Route Alternative Cards */}
+        {alternativePaths.length > 0 && (
+          <div className="route-alternatives-container">
+            <div className="route-alternatives-header">
+              <span className="route-alternatives-title">Route Alternatives ({alternativePaths.length})</span>
+              <span className="route-alternatives-hint">Click a card to switch path</span>
+            </div>
+            <div className="route-alternatives-grid">
+              {alternativePaths.map((path, idx) => {
+                const isSelected =
+                  routeResult &&
+                  (path === routeResult ||
+                    path.rank === routeResult.rank ||
+                    (path.route &&
+                      routeResult.route &&
+                      path.route.map((n) => n.nodeId).join("->") ===
+                        routeResult.route.map((n) => n.nodeId).join("->")));
+                const isShortest = path.rank === 1 || idx === 0;
+
+                return (
+                  <button
+                    key={path.rank || idx}
+                    type="button"
+                    className={`route-alt-card ${isSelected ? "selected" : ""} ${
+                      isShortest ? "shortest" : ""
+                    }`}
+                    onClick={() => setRouteResult(path)}
+                  >
+                    <div className="route-alt-card-top">
+                      <div className="route-alt-rank-group">
+                        <span className="route-alt-rank">Route #{path.rank || idx + 1}</span>
+                        {isShortest && (
+                          <span className="route-alt-badge-shortest">Shortest</span>
+                        )}
+                      </div>
+                      <span className="route-alt-distance">{path.distance} units</span>
+                    </div>
+                    <div className="route-alt-meta">
+                      {formatTimeAndSteps(path.steps, path.timeSeconds)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Interactive Map & AR View Switcher */}
         <section id="map-section">
           <div className="view-mode-tabs">
@@ -445,6 +555,7 @@ function App() {
             <CampusMap
               routeResult={routeResult}
               startNode={null}
+              alternativePaths={alternativePaths}
             />
           )}
 
@@ -465,6 +576,7 @@ function App() {
                 <CampusMap
                   routeResult={routeResult}
                   startNode={null}
+                  alternativePaths={alternativePaths}
                 />
               </div>
               <div className="split-view-ar" style={{ height: "480px", position: "relative", borderRadius: "16px", overflow: "hidden" }}>
@@ -540,7 +652,12 @@ function App() {
       {showVoice && (
         <VoiceAssistant
           currentNodeId={currentNodeId}
-          onRouteResult={(rr) => setRouteResult(rr)}
+          onRouteResult={(rr) => {
+            setRouteResult(rr);
+            if (rr?.route?.[0]?.nodeId && rr?.destination?.nodeId) {
+              fetchAndSetAlternatives(rr.route[0].nodeId, rr.destination.nodeId, rr);
+            }
+          }}
           onNavigate={(query) => navigate(query)}
           onClose={() => setShowVoice(false)}
         />

@@ -629,6 +629,130 @@ button {
   line-height: 1.6;
 }
 
+/* ── Route Alternatives Cards ─────────────────────────────────────────────── */
+.route-alternatives-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.route-alternatives-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.25rem;
+}
+
+.route-alternatives-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.route-alternatives-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.route-alternatives-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem;
+}
+
+.route-alt-card {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  text-align: left;
+  box-shadow: var(--shadow-glass);
+  cursor: pointer;
+  transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.route-alt-card:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-light);
+  transform: translateY(-2px);
+}
+
+.route-alt-card.selected {
+  border-color: var(--primary-blue);
+  box-shadow: 0 0 0 1px var(--primary-blue), 0 8px 24px var(--primary-glow);
+}
+
+.route-alt-card.selected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--primary-blue);
+}
+
+.route-alt-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.route-alt-rank-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.route-alt-rank {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.route-alt-badge-shortest {
+  background: rgba(52, 211, 153, 0.2);
+  color: var(--success-emerald);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.route-alt-distance {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.route-alt-meta {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.route-alt-card.selected .route-alt-meta {
+  color: var(--primary-blue);
+  font-weight: 600;
+}
+
 /* ── Map Glass Container & Clean Mobile Header ──────────────────────────────── */
 .map-container {
   background: var(--glass-bg);

@@ -27,7 +27,7 @@ const TYPE_LABEL = {
 const ALWAYS_LABEL_TYPES = new Set(["entrance", "cafeteria", "seating"]);
 const WALK_MS = 600;
 
-function CampusMap({ routeResult, startNode }) {
+function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
   const [graphData, setGraphData] = useState(FALLBACK_GRAPH_DATA);
   const [gLoading, setGLoading] = useState(false);
   const [gError, setGError] = useState(null);
@@ -128,6 +128,19 @@ function CampusMap({ routeResult, startNode }) {
   const walkedEdgeSet = new Set();
   for (let i = 0; i < walkIndex; i++) {
     walkedEdgeSet.add([route[i].nodeId, route[i + 1].nodeId].sort().join("|"));
+  }
+
+  const selectedRouteKey = route.map((n) => n.nodeId).join("->");
+  const unselectedAlts = (alternativePaths || []).filter(
+    (p) => (p?.route || []).map((n) => n.nodeId).join("->") !== selectedRouteKey
+  );
+
+  const altEdgeSet = new Set();
+  for (const alt of unselectedAlts) {
+    const r = alt.route || [];
+    for (let i = 0; i < r.length - 1; i++) {
+      altEdgeSet.add([r[i].nodeId, r[i + 1].nodeId].sort().join("|"));
+    }
   }
 
   if (gLoading) {
@@ -328,12 +341,29 @@ function CampusMap({ routeResult, startNode }) {
             const nb = graphData.nodes[b];
             if (!na || !nb) return null;
             const key = [a, b].sort().join("|");
-            if (routeEdgeSet.has(key)) return null;
+            if (routeEdgeSet.has(key) || altEdgeSet.has(key)) return null;
             return (
               <line
                 key={`bg-${i}`}
                 x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
                 stroke="var(--graph-edge)" strokeWidth="3.5" strokeLinecap="round"
+              />
+            );
+          })}
+
+          {/* Alternative route edges (dimmed in a different colour) */}
+          {graphData.edges.map(([a, b], i) => {
+            const na = graphData.nodes[a];
+            const nb = graphData.nodes[b];
+            if (!na || !nb) return null;
+            const key = [a, b].sort().join("|");
+            if (routeEdgeSet.has(key) || !altEdgeSet.has(key)) return null;
+            return (
+              <line
+                key={`alt-${i}`}
+                x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                stroke="#818cf8" strokeWidth="5.5" strokeLinecap="round"
+                strokeDasharray="8 6" opacity="0.65"
               />
             );
           })}
@@ -443,6 +473,11 @@ function CampusMap({ routeResult, startNode }) {
           <span className="legend-item highlight">
             <span className="legend-dot" style={{ background: "#38bdf8" }} /> Path Ahead
           </span>
+          {unselectedAlts.length > 0 && (
+            <span className="legend-item highlight">
+              <span className="legend-dot" style={{ background: "#818cf8" }} /> Alternative
+            </span>
+          )}
           <span className="legend-item highlight">
             <span className="legend-dot" style={{ background: "#34d399" }} /> Walked
           </span>

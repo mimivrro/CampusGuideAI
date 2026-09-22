@@ -16,7 +16,7 @@ import { nodes, edges, poiCategories } from '../data/buildingData.js';
 // ---------------------------------------------------------------------------
 // 1. Build adjacency list (undirected — each edge added in both directions)
 // ---------------------------------------------------------------------------
-const graph = {};
+export const graph = {};
 
 for (const nodeId of Object.keys(nodes)) {
   graph[nodeId] = [];
@@ -371,10 +371,14 @@ function generateTurnInstructions(route) {
   return instructions;
 }
 
-function buildRouteResult(startNodeId, destNodeId, path, distance) {
+export function buildRouteResult(startNodeId, destNodeId, path, distance) {
   const destNode = nodes[destNodeId];
-  const seconds = distance / PIXELS_PER_SECOND;
-  const estimatedMinutes = Math.max(1, Math.round(seconds / 60));
+  const METERS_PER_UNIT = 0.05;
+  const STEP_LENGTH_M = 0.75;
+  const STEP_SECONDS = 1;
+  const steps = Math.round((distance * METERS_PER_UNIT) / STEP_LENGTH_M);
+  const timeSeconds = steps * STEP_SECONDS;
+  const estimatedMinutes = Math.max(1, Math.round(timeSeconds / 60));
 
   // Build ordered route with coordinates
   const route = path.map(nodeId => ({
