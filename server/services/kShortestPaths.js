@@ -164,7 +164,7 @@ export function findKShortestPaths(startId, endId, k = 3) {
 // ---------------------------------------------------------------------------
 // Alternative Routes Resolver & Builder
 // ---------------------------------------------------------------------------
-export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3) {
+export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3, destinationLabel = null) {
   if (!nodes[startNodeId]) {
     return { success: false, error: `Unknown start node: ${startNodeId}` };
   }
@@ -176,7 +176,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
     destinationQuery.match(/^closest\s+(.+)$/i);
 
   let destId = null;
-  let destLabel = null;
+  let destLabel = destinationLabel || null;
   if (nearestMatch) {
     const typeQuery = nearestMatch[1].trim();
     const nearestResult = findNearest(typeQuery, startNodeId);
@@ -184,7 +184,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
       return { success: false, error: `No ${typeQuery} found in the campus graph.` };
     }
     destId = nearestResult.destination.nodeId;
-    destLabel = nearestResult.destination.label;
+    if (!destLabel) destLabel = nearestResult.destination.label;
   } else {
     const resolved = resolveNode(destinationQuery);
     if (!resolved) {
@@ -194,7 +194,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
       };
     }
     destId = resolved.nodeId;
-    destLabel = resolved.node?.label;
+    if (!destLabel) destLabel = resolved.node?.label;
   }
 
   if (destId === startNodeId) {

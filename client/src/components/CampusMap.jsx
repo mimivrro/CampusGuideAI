@@ -27,7 +27,23 @@ const TYPE_LABEL = {
 const ALWAYS_LABEL_TYPES = new Set(["entrance", "cafeteria", "seating", "classroom", "lab"]);
 const WALK_MS = 600;
 
-function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor: propFloor, onFloorChange }) {
+function formatTimeShort(timeSeconds, steps) {
+  const s = Math.round(timeSeconds ?? (steps || 0));
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  if (m > 0 && remS > 0) return `${m}m ${remS}s`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
+function CampusMap({
+  routeResult,
+  startNode,
+  alternativePaths = [],
+  currentFloor: propFloor,
+  onFloorChange,
+  onSelectPath,
+}) {
   const [graphData, setGraphData] = useState(FALLBACK_GRAPH_DATA);
   const [floor, setFloor] = useState(propFloor ?? 0);
   const [gLoading, setGLoading] = useState(false);
@@ -154,10 +170,15 @@ function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor
   );
 
   const altEdgeSet = new Set();
+  const altNodeSet = new Set();
   for (const alt of unselectedAlts) {
     const r = alt.route || [];
     for (let i = 0; i < r.length - 1; i++) {
       altEdgeSet.add([r[i].nodeId, r[i + 1].nodeId].sort().join("|"));
+      altNodeSet.add(r[i].nodeId);
+    }
+    if (r.length > 0) {
+      altNodeSet.add(r[r.length - 1].nodeId);
     }
   }
 
@@ -215,6 +236,7 @@ function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor
     if (isCurrentPos) return { r: 24, fill: "#38bdf8", stroke: "#ffffff", sw: 4, opacity: 1, zOrder: 4 };
     if (isDestination) return { r: 22, fill: "#f43f5e", stroke: "#ffffff", sw: 4, opacity: 1, zOrder: 3 };
     if (onRoute)       return { r: 14, fill: TYPE_COLOR[node.type] ?? "#94a3b8", stroke: "#ffffff", sw: 2, opacity: 1, zOrder: 2 };
+    if (altNodeSet.has(id)) return { r: 11, fill: TYPE_COLOR[node.type] ?? "#818cf8", stroke: "#818cf8", sw: 2, opacity: 0.9, zOrder: 2 };
     if (isCorridor)    return { r: 4,  fill: "#334155", stroke: "none", sw: 0, opacity: 0.6, zOrder: 0 };
     return               { r: 10, fill: TYPE_COLOR[node.type] ?? "#64748b", stroke: "none", sw: 0, opacity: 0.75, zOrder: 1 };
   }
@@ -303,15 +325,58 @@ function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor
       <div className="map-header">
         <div className="map-header-info">
           <div className="map-title-row">
-            <h3>Interactive Campus Graph</h3>
-            <span className={`map-badge ${hasRoute ? "map-badge--active" : ""}`}>
-              {hasRoute ? "Route Active" : "Graph View"}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+              <h3>Interactive Campus Graph</h3>
+              <span className={`map-badge ${hasRoute ? "map-badge--active" : ""}`}>
+                {hasRoute ? "Route Active" : "Graph View"}
+              </span>
+            </div>
+
+            {/* Alternative Route Quick Select Pills on Map Header */}
+            {alternativePaths.length > 1 && (
+              <div className="map-route-pills" title="Alternative paths comparison">
+                {alternativePaths.map((p, idx) => {
+                  const isSelected =
+                    routeResult &&
+                    (p === routeResult ||
+                      p.rank === routeResult.rank ||
+                      (p.route &&
+                        routeResult.route &&
+                        p.route.map((n) => n.nodeId).join("->") ===
+                          routeResult.route.map((n) => n.nodeId).join("->")));
+                  const isShortest = p.rank === 1 || idx === 0;
+
+                  return (
+                    <button
+                      key={p.rank || idx}
+                      type="button"
+                      className={`map-route-pill ${isSelected ? "active" : ""}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onSelectPath) onSelectPath(p);
+                      }}
+                      title={`Route #${p.rank || idx + 1}: ${p.distance} units, ≈ ${p.steps ?? 0} steps (${formatTimeShort(p.timeSeconds, p.steps)})`}
+                    >
+                      <span className="pill-rank">Route #{p.rank || idx + 1}</span>
+                      <span className="pill-time">{formatTimeShort(p.timeSeconds, p.steps)}</span>
+                      {isShortest && <span className="pill-tag">Shortest</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="map-target-row">
             {destination ? (
-              <p className="map-target-text">Target: <strong>{destination.label || destination.type}</strong></p>
+              <p className="map-target-text">
+                Target: <strong>{destination.label || destination.type}</strong>
+                {routeResult && (
+                  <span className="map-target-stats">
+                    {" "}· {routeResult.distance} units · ≈ {routeResult.steps ?? Math.round((routeResult.distance * 0.05) / 0.75)} steps ({formatTimeShort(routeResult.timeSeconds, routeResult.steps)})
+                  </span>
+                )}
+              </p>
             ) : (
               <p className="map-target-text">Select a destination or hover nodes to inspect</p>
             )}
@@ -402,45 +467,47 @@ function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor
             );
           })}
 
-          {/* Alternative route edges (dimmed in a different colour) */}
-          {graphData.edges.map(([a, b], i) => {
-            const na = graphData.nodes[a];
-            const nb = graphData.nodes[b];
-            if (!na || !nb) return null;
-            const key = [a, b].sort().join("|");
-            if (routeEdgeSet.has(key) || !altEdgeSet.has(key)) return null;
+          {/* Alternative route edges */}
+          {unselectedAlts.map((alt, altIdx) => {
+            const r = alt.route || [];
             return (
-              <line
-                key={`alt-${i}`}
-                x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
-                stroke="#818cf8" strokeWidth="5.5" strokeLinecap="round"
-                strokeDasharray="8 6" opacity="0.65"
-              />
+              <g key={`alt-direct-${alt.rank || altIdx}`}>
+                {r.slice(0, -1).map((curr, stepIdx) => {
+                  const next = r[stepIdx + 1];
+                  const key = [curr.nodeId, next.nodeId].sort().join("|");
+                  if (routeEdgeSet.has(key)) return null;
+                  return (
+                    <line
+                      key={`alt-direct-${altIdx}-${stepIdx}`}
+                      x1={curr.x} y1={curr.y} x2={next.x} y2={next.y}
+                      stroke="#818cf8" strokeWidth="6" strokeLinecap="round"
+                      strokeDasharray="8 6" opacity="0.85"
+                    />
+                  );
+                })}
+              </g>
             );
           })}
 
           {/* Active route edges */}
-          {graphData.edges.map(([a, b], i) => {
-            const na = graphData.nodes[a];
-            const nb = graphData.nodes[b];
-            if (!na || !nb) return null;
-            const key = [a, b].sort().join("|");
-            if (!routeEdgeSet.has(key)) return null;
+          {route.slice(0, -1).map((curr, stepIdx) => {
+            const next = route[stepIdx + 1];
+            const key = [curr.nodeId, next.nodeId].sort().join("|");
             const walked = walkedEdgeSet.has(key);
             return walked ? (
               <line
-                key={`w-${i}`}
-                x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                key={`w-direct-${stepIdx}`}
+                x1={curr.x} y1={curr.y} x2={next.x} y2={next.y}
                 stroke="#34d399" strokeWidth="10" strokeLinecap="round"
               />
             ) : (
-              <g key={`r-${i}`}>
+              <g key={`r-direct-${stepIdx}`}>
                 <line
-                  x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                  x1={curr.x} y1={curr.y} x2={next.x} y2={next.y}
                   stroke="rgba(56, 189, 248, 0.25)" strokeWidth="20" strokeLinecap="round"
                 />
                 <line
-                  x1={na.x} y1={na.y} x2={nb.x} y2={nb.y}
+                  x1={curr.x} y1={curr.y} x2={next.x} y2={next.y}
                   stroke="#38bdf8" strokeWidth="9" strokeLinecap="round"
                   strokeDasharray="24 12"
                 />

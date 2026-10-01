@@ -88,12 +88,16 @@ router.post(
       .isString().withMessage('destinationQuery must be a string')
       .isLength({ min: 1, max: 200 }).withMessage('destinationQuery must be 1–200 characters')
       .trim(),
+    body('destinationLabel')
+      .optional()
+      .isString().withMessage('destinationLabel must be a string')
+      .trim(),
   ],
   (req, res) => {
     if (!validate(req, res)) return;
 
-    const { startNodeId, destinationQuery } = req.body;
-    const result = calculateAlternativeRoutes(startNodeId, destinationQuery);
+    const { startNodeId, destinationQuery, destinationLabel } = req.body;
+    const result = calculateAlternativeRoutes(startNodeId, destinationQuery, 3, destinationLabel);
 
     if (result.success) {
       res.json(result);

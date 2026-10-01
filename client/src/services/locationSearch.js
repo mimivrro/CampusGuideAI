@@ -1,4 +1,4 @@
-import { FALLBACK_GRAPH_DATA } from './fallbackGraphData';
+import { FALLBACK_GRAPH_DATA } from './fallbackGraphData.js';
 
 /**
  * Get nodes with floor-adjusted labels (e.g. A-002 -> A-102 on 1st floor).

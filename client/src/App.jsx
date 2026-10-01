@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import CampusMap from "./components/CampusMap";
 import VoiceAssistant from "./components/VoiceAssistant";
 import ARNavigation from "./components/ARNavigation";
-import { getRoute, getNearest, searchLocations } from "./services/navigationApi";
+import { getRoute, getNearest, getAlternatives, searchLocations } from "./services/navigationApi";
 import { searchLocalLocations } from "./services/locationSearch";
 import { API_BASE } from "./config";
 
@@ -181,18 +181,34 @@ function App() {
     }
   }, [themeMode]);
 
-  const fetchAndSetAlternatives = useCallback(async (startId, destId, initialRoute) => {
-    if (!startId || !destId) return;
+  const handleSelectAlternative = useCallback((path) => {
+    if (!path) return;
+    setRouteResult(path);
+    const destLabel = path.destination?.label || path.destination?.type || "Destination";
+    const timingInfo = formatTimeAndSteps(path.steps, path.timeSeconds);
+    setResponse(
+      `Selected Route #${path.rank || 1}: **${destLabel}** (${timingInfo}, ${path.distance} units).` +
+      (path.landmarks?.length ? ` Landmarks on path: ${path.landmarks.join(", ")}.` : "")
+    );
+    if (destLabel) {
+      const match = destLabel.match(/^[A-Z]-(\d)\d{2}$/);
+      if (match) {
+        setCurrentFloor(parseInt(match[1], 10));
+      }
+    }
+  }, []);
+
+  const fetchAndSetAlternatives = useCallback(async (startId, destQuery, destLabel, initialRoute) => {
+    if (!startId || !destQuery) return;
     try {
-      const res = await fetch(`${API_BASE}/navigation/alternatives`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ startNodeId: startId, destinationQuery: destId }),
-      });
-      const data = await res.json();
-      if (data.success && data.paths && data.paths.length > 0) {
+      const data = await getAlternatives(startId, destQuery, destLabel);
+      if (data?.success && Array.isArray(data.paths) && data.paths.length > 0) {
         setAlternativePaths(data.paths);
-        setRouteResult(data.paths[0]); // Shortest selected by default
+        setRouteResult((prev) => {
+          if (!prev) return data.paths[0];
+          const matched = data.paths.find((p) => p.rank === prev.rank);
+          return matched || data.paths[0];
+        });
       } else if (initialRoute) {
         setAlternativePaths([initialRoute]);
       }
@@ -220,14 +236,17 @@ function App() {
         result = await getRoute(currentNodeId, destinationQuery);
       }
       setRouteResult(result);
+
+      const destLabel = result.destination?.label || result.destination?.type || destinationQuery;
+      const timingInfo = formatTimeAndSteps(result.steps, result.timeSeconds);
       setResponse(
-        `Destination found: **${result.destination.label || result.destination.type}** (${result.estimatedMinutes} min walk, ${result.distance} units).` +
-        (result.landmarks.length ? ` Landmarks on path: ${result.landmarks.join(", ")}.` : "")
+        `Destination found: **${destLabel}** (${timingInfo}, ${result.distance} units).` +
+        (result.landmarks?.length ? ` Landmarks on path: ${result.landmarks.join(", ")}.` : "")
       );
 
-      if (result?.route?.[0]?.nodeId && result?.destination?.nodeId) {
-        await fetchAndSetAlternatives(result.route[0].nodeId, result.destination.nodeId, result);
-      }
+      const startNodeId = result.route?.[0]?.nodeId || currentNodeId;
+      const targetQuery = result.destination?.label || destinationQuery;
+      await fetchAndSetAlternatives(startNodeId, targetQuery, result.destination?.label, result);
     } catch (err) {
       const msg = err.message || "Navigation failed.";
       setError(msg);
@@ -250,10 +269,12 @@ function App() {
       const data = await aiChat(message, currentNodeId);
       if (data.routeResult) {
         setRouteResult(data.routeResult);
-        if (data.routeResult.route?.[0]?.nodeId && data.routeResult.destination?.nodeId) {
+        if (data.routeResult.route?.[0]?.nodeId) {
+          const destQuery = data.routeResult.destination?.label || data.routeResult.destination?.nodeId || message;
           await fetchAndSetAlternatives(
             data.routeResult.route[0].nodeId,
-            data.routeResult.destination.nodeId,
+            destQuery,
+            data.routeResult.destination?.label,
             data.routeResult
           );
         }
@@ -680,7 +701,7 @@ function App() {
                     className={`route-alt-card ${isSelected ? "selected" : ""} ${
                       isShortest ? "shortest" : ""
                     }`}
-                    onClick={() => setRouteResult(path)}
+                    onClick={() => handleSelectAlternative(path)}
                   >
                     <div className="route-alt-card-top">
                       <div className="route-alt-rank-group">
@@ -688,11 +709,18 @@ function App() {
                         {isShortest && (
                           <span className="route-alt-badge-shortest">Shortest</span>
                         )}
+                        {isSelected && !isShortest && (
+                          <span className="route-alt-badge-active">Selected</span>
+                        )}
                       </div>
                       <span className="route-alt-distance">{path.distance} units</span>
                     </div>
                     <div className="route-alt-meta">
-                      {formatTimeAndSteps(path.steps, path.timeSeconds)}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                      </svg>
+                      <span>{formatTimeAndSteps(path.steps, path.timeSeconds)}</span>
                     </div>
                   </button>
                 );
@@ -731,6 +759,7 @@ function App() {
               alternativePaths={alternativePaths}
               currentFloor={currentFloor}
               onFloorChange={setCurrentFloor}
+              onSelectPath={handleSelectAlternative}
             />
           )}
 
@@ -754,6 +783,7 @@ function App() {
                   alternativePaths={alternativePaths}
                   currentFloor={currentFloor}
                   onFloorChange={setCurrentFloor}
+                  onSelectPath={handleSelectAlternative}
                 />
               </div>
               <div className="split-view-ar" style={{ height: "480px", position: "relative", borderRadius: "16px", overflow: "hidden" }}>

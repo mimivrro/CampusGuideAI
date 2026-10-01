@@ -442,6 +442,10 @@ export function buildRouteResult(startNodeId, destNodeId, path, distance, overri
     type: nodes[nodeId].type,
   }));
 
+  if (overrideLabel && route.length > 0) {
+    route[route.length - 1].label = overrideLabel;
+  }
+
   // Identify notable landmarks along the route (lifts, stairs, entrances)
   const landmarks = route
     .filter(n => ['lift', 'stairs', 'entrance'].includes(n.type) && n.label)
@@ -460,6 +464,8 @@ export function buildRouteResult(startNodeId, destNodeId, path, distance, overri
     },
     route,
     distance: Math.round(distance),
+    steps,
+    timeSeconds,
     estimatedMinutes,
     landmarks,
     turnInstructions,
