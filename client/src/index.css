@@ -510,6 +510,141 @@ button {
   color: var(--text-muted);
 }
 
+/* ── Search Bar Wrapper & Suggestions Dropdown ────────────────────────────── */
+.search-bar-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass), 0 20px 40px rgba(0, 0, 0, 0.4);
+  max-height: 340px;
+  overflow-y: auto;
+  z-index: 100;
+  padding: 0.35rem 0;
+  animation: dropdown-fade-in 0.18s ease-out;
+}
+
+@keyframes dropdown-fade-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  transition: background-color var(--transition);
+  border-left: 3px solid transparent;
+}
+
+.suggestion-item:not(:last-child) {
+  border-bottom: 1px solid var(--glass-border-light);
+}
+
+.suggestion-item:hover,
+.suggestion-item.selected {
+  background: rgba(56, 189, 248, 0.12);
+  border-left-color: var(--primary-blue);
+}
+
+.suggestion-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid var(--glass-border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-blue);
+  flex-shrink: 0;
+}
+
+.suggestion-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.suggestion-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion-floor-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 4px;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  letter-spacing: 0.02em;
+}
+
+.suggestion-type {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.search-clear-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.search-clear-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.suggestions-dropdown::-webkit-scrollbar {
+  width: 6px;
+}
+.suggestions-dropdown::-webkit-scrollbar-track {
+  background: transparent;
+}
+.suggestions-dropdown::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 3px;
+}
+
 /* ── Action Buttons ────────────────────────────────────────────────────────── */
 .action-btn {
   display: inline-flex;
@@ -923,6 +1058,47 @@ button {
   border-color: var(--primary-blue);
   color: var(--primary-blue);
   transform: scale(1.05);
+}
+
+.floor-pill-group {
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border-light);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 3px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+  margin-bottom: 0.25rem;
+}
+
+.floor-pill-btn {
+  width: 30px;
+  height: 24px;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.floor-pill-btn:hover {
+  color: var(--text-primary);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.floor-pill-btn.active {
+  background: var(--primary-blue);
+  color: #ffffff;
+  box-shadow: 0 0 10px var(--primary-glow);
 }
 
 /* ── Modern Map Info Bar & Metrics Chips ───────────────────────────────────── */

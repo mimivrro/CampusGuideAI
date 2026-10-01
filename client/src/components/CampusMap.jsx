@@ -24,17 +24,35 @@ const TYPE_LABEL = {
   washroom_gents: "Gents WC", washroom_ladies: "Ladies WC",
 };
 
-const ALWAYS_LABEL_TYPES = new Set(["entrance", "cafeteria", "seating"]);
+const ALWAYS_LABEL_TYPES = new Set(["entrance", "cafeteria", "seating", "classroom", "lab"]);
 const WALK_MS = 600;
 
-function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
+function CampusMap({ routeResult, startNode, alternativePaths = [], currentFloor: propFloor, onFloorChange }) {
   const [graphData, setGraphData] = useState(FALLBACK_GRAPH_DATA);
+  const [floor, setFloor] = useState(propFloor ?? 0);
   const [gLoading, setGLoading] = useState(false);
   const [gError, setGError] = useState(null);
   const [walkIndex, setWalkIndex] = useState(0);
   const [isWalking, setIsWalking] = useState(false);
   const [hoveredNode, setHoveredNode] = useState(null);
   const walkTimer = useRef(null);
+
+  useEffect(() => {
+    if (propFloor !== undefined) {
+      setFloor(propFloor);
+    }
+  }, [propFloor]);
+
+  useEffect(() => {
+    if (routeResult?.destination?.label) {
+      const match = routeResult.destination.label.match(/^[A-Z]-(\d)(\d{2})$/);
+      if (match) {
+        const destFloor = parseInt(match[1], 10);
+        setFloor(destFloor);
+        if (onFloorChange) onFloorChange(destFloor);
+      }
+    }
+  }, [routeResult, onFloorChange]);
 
   // Zoom & Pan state
   const [zoom, setZoom] = useState(1);
@@ -201,6 +219,22 @@ function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
     return               { r: 10, fill: TYPE_COLOR[node.type] ?? "#64748b", stroke: "none", sw: 0, opacity: 0.75, zOrder: 1 };
   }
 
+  function getNodeDisplayLabel(id, node) {
+    if (id === destination?.nodeId && destination?.label) {
+      return destination.label;
+    }
+    if (node.label && node.label.match(/^[A-Z]-\d{3}$/)) {
+      const match = node.label.match(/^([A-Z])-(\d{3})$/);
+      if (match) {
+        const block = match[1];
+        const num = parseInt(match[2], 10);
+        if (floor === 0) return `${block}-${num.toString().padStart(3, '0')}`;
+        return `${block}-${(floor * 100 + num).toString().padStart(3, '0')}`;
+      }
+    }
+    return node.label;
+  }
+
   function showLabel(id, node) {
     if (!node.label) return false;
     if (id === currentPos?.nodeId) return true;
@@ -224,7 +258,7 @@ function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
 
   sortedNodes.forEach(({ id, node, r }) => {
     if (!showLabel(id, node)) return;
-    const text = node.label || "";
+    const text = getNodeDisplayLabel(id, node) || "";
     if (!text) return;
 
     const approxWidth = text.length * 11 + 16;
@@ -311,6 +345,23 @@ function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
         style={{ cursor: isDragging ? "grabbing" : "grab", minHeight: "520px", height: "520px" }}
       >
         <div className="map-zoom-controls">
+          <div className="floor-pill-group" title="Select Campus Floor">
+            {[0, 1, 2, 3].map((f) => (
+              <button
+                key={f}
+                className={`floor-pill-btn ${floor === f ? "active" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFloor(f);
+                  if (onFloorChange) onFloorChange(f);
+                }}
+                title={f === 0 ? "Ground Floor" : `Floor ${f}`}
+              >
+                {f === 0 ? "GF" : `${f}F`}
+              </button>
+            ))}
+          </div>
+
           <button className="zoom-btn" onClick={handleZoomIn} title="Zoom In">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -424,7 +475,7 @@ function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
                   opacity={opacity}
                 />
 
-                {showLbl && node.label && (
+                {showLbl && getNodeDisplayLabel(id, node) && (
                   <g transform={`translate(${node.x + pos.xOff}, ${node.y + pos.yOff})`}>
                     <text
                       x={0} y={0}
@@ -436,7 +487,7 @@ function CampusMap({ routeResult, startNode, alternativePaths = [] }) {
                       paintOrder="stroke"
                       stroke="var(--graph-text-stroke)" strokeWidth="6"
                     >
-                      {node.label}
+                      {getNodeDisplayLabel(id, node)}
                     </text>
                   </g>
                 )}

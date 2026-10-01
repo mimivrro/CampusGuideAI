@@ -176,6 +176,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
     destinationQuery.match(/^closest\s+(.+)$/i);
 
   let destId = null;
+  let destLabel = null;
   if (nearestMatch) {
     const typeQuery = nearestMatch[1].trim();
     const nearestResult = findNearest(typeQuery, startNodeId);
@@ -183,6 +184,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
       return { success: false, error: `No ${typeQuery} found in the campus graph.` };
     }
     destId = nearestResult.destination.nodeId;
+    destLabel = nearestResult.destination.label;
   } else {
     const resolved = resolveNode(destinationQuery);
     if (!resolved) {
@@ -192,10 +194,11 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
       };
     }
     destId = resolved.nodeId;
+    destLabel = resolved.node?.label;
   }
 
   if (destId === startNodeId) {
-    const single = buildRouteResult(startNodeId, destId, [startNodeId], 0);
+    const single = buildRouteResult(startNodeId, destId, [startNodeId], 0, destLabel);
     return {
       success: true,
       paths: [{ ...single, rank: 1, steps: 0, timeSeconds: 0 }],
@@ -205,10 +208,10 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
   const rawPaths = findKShortestPaths(startNodeId, destId, k);
 
   if (!rawPaths || rawPaths.length === 0) {
-    const destLabel = nodes[destId]?.label || destId;
+    const label = destLabel || nodes[destId]?.label || destId;
     return {
       success: false,
-      error: `No navigable path found from current location to "${destLabel}". The graph may be disconnected.`,
+      error: `No navigable path found from current location to "${label}". The graph may be disconnected.`,
     };
   }
 
@@ -218,7 +221,7 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3)
   const paths = rawPaths.map((p, idx) => {
     const steps = calculateSteps(p.distance);
     const timeSeconds = calculateTimeSeconds(steps);
-    const baseResult = buildRouteResult(startNodeId, destId, p.path, p.distance);
+    const baseResult = buildRouteResult(startNodeId, destId, p.path, p.distance, destLabel);
 
     return {
       ...baseResult,

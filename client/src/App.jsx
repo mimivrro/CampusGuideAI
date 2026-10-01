@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import CampusMap from "./components/CampusMap";
 import VoiceAssistant from "./components/VoiceAssistant";
 import ARNavigation from "./components/ARNavigation";
-import { getRoute, getNearest } from "./services/navigationApi";
+import { getRoute, getNearest, searchLocations } from "./services/navigationApi";
+import { searchLocalLocations } from "./services/locationSearch";
 import { API_BASE } from "./config";
 
 const DEFAULT_NODE_ID = "node_1005"; // A-Block Entrance
@@ -124,11 +125,34 @@ function App() {
   const [error, setError] = useState(null);
 
   const [question, setQuestion] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [currentFloor, setCurrentFloor] = useState(0);
+  const searchInputRef = useRef(null);
+  const dropdownRef = useRef(null);
+
   const [response, setResponse] = useState("");
   const [showVoice, setShowVoice] = useState(false);
   const [showPoisModal, setShowPoisModal] = useState(false);
   const [showArModal, setShowArModal] = useState(false);
   const [viewMode, setViewMode] = useState("2d"); // "2d" | "ar" | "split"
+
+  // Close suggestions dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (
+        searchInputRef.current &&
+        !searchInputRef.current.contains(e.target) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target)
+      ) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Theme state: "dark" | "light" | "system"
   const [themeMode, setThemeMode] = useState(() => {
@@ -250,13 +274,100 @@ function App() {
     }
   }, [currentNodeId, fetchAndSetAlternatives, navigate]);
 
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setQuestion(val);
+    setSelectedIndex(-1);
+    if (!val.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    // Instant local search
+    const local = searchLocalLocations(val);
+    setSuggestions(local);
+    setShowSuggestions(local.length > 0);
+
+    // Also fetch from API in background to ensure sync
+    searchLocations(val).then((data) => {
+      if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
+        setSuggestions(data.results);
+        setShowSuggestions(true);
+      }
+    }).catch(() => {});
+  };
+
+  const handleSelectSuggestion = useCallback((suggestion) => {
+    setQuestion(suggestion.label);
+    setShowSuggestions(false);
+    setSelectedIndex(-1);
+    if (suggestion.floor !== undefined) {
+      setCurrentFloor(suggestion.floor);
+    }
+    navigate(suggestion.label);
+  }, [navigate]);
+
   const handleSend = () => {
     const q = question.trim();
-    if (q && !isLoading) askAI(q);
+    if (q && !isLoading) {
+      setShowSuggestions(false);
+      navigate(q);
+    }
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter") handleSend();
+    if (showSuggestions && suggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowSuggestions(false);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+          handleSelectSuggestion(suggestions[selectedIndex]);
+          return;
+        }
+        setShowSuggestions(false);
+        handleSend();
+        return;
+      }
+    }
+
+    if (e.key === "Enter") {
+      setShowSuggestions(false);
+      handleSend();
+    }
+  };
+
+  const getSuggestionIcon = (type) => {
+    if (type === "classroom") return POI_ICONS.classroom;
+    if (type === "lab") return POI_ICONS.lab;
+    if (type === "lift") return POI_ICONS.lift;
+    if (type === "stairs") return POI_ICONS.stairs;
+    if (type === "washroom_gents" || type === "washroom_ladies") return POI_ICONS.washroom;
+    if (type === "cafeteria") return POI_ICONS.cafeteria;
+    if (type === "seating") return POI_ICONS.library;
+    if (type === "office") return POI_ICONS.faculty;
+    return POI_ICONS.classroom;
+  };
+
+  const getSuggestionTypeLabel = (type) => {
+    if (type === "washroom_gents") return "Gents Washroom";
+    if (type === "washroom_ladies") return "Ladies Washroom";
+    if (type === "seating") return "Library / Seating";
+    return type ? type.replace(/_/g, " ") : "Location";
   };
 
   const renderResponse = (text) => {
@@ -406,47 +517,109 @@ function App() {
           </div>
         </header>
 
-        {/* Search Bar */}
-        <section id="search-section" className="search-container">
-          <input
-            type="text"
-            className="search-input"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search room or location..."
-            disabled={isLoading}
-          />
-          
-          <button
-            className={`action-btn action-btn-voice ${showVoice ? 'active' : ''}`}
-            title="Voice Assistant"
-            onClick={() => setShowVoice((prev) => !prev)}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" x2="12" y1="19" y2="22"/>
-            </svg>
-          </button>
+        {/* Search Bar with Autocomplete Suggestions */}
+        <div className="search-bar-wrapper">
+          <section id="search-section" className="search-container">
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="search-input"
+              value={question}
+              onChange={handleInputChange}
+              onFocus={() => {
+                if (question.trim().length > 0 && suggestions.length > 0) {
+                  setShowSuggestions(true);
+                }
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Search room or location (e.g. 102, B 103, Library)..."
+              disabled={isLoading}
+              autoComplete="off"
+              spellCheck="false"
+            />
 
-          <button
-            className="action-btn action-btn-primary"
-            onClick={handleSend}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              "..."
-            ) : (
-              <>
-                <span className="nav-btn-text">Navigate</span>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M5 12h14M12 5l7 7-7 7"/>
+            {question && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => {
+                  setQuestion("");
+                  setSuggestions([]);
+                  setShowSuggestions(false);
+                  searchInputRef.current?.focus();
+                }}
+                title="Clear search"
+                aria-label="Clear search"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
-              </>
+              </button>
             )}
-          </button>
-        </section>
+
+            <button
+              className={`action-btn action-btn-voice ${showVoice ? 'active' : ''}`}
+              title="Voice Assistant"
+              onClick={() => setShowVoice((prev) => !prev)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" x2="12" y1="19" y2="22"/>
+              </svg>
+            </button>
+
+            <button
+              className="action-btn action-btn-primary"
+              onClick={handleSend}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                "..."
+              ) : (
+                <>
+                  <span className="nav-btn-text">Navigate</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </>
+              )}
+            </button>
+          </section>
+
+          {/* Autocomplete Suggestions Dropdown */}
+          {showSuggestions && suggestions.length > 0 && (
+            <div ref={dropdownRef} className="suggestions-dropdown" role="listbox">
+              {suggestions.map((item, idx) => (
+                <div
+                  key={`${item.nodeId}-${item.label}-${item.floor ?? 0}`}
+                  className={`suggestion-item ${idx === selectedIndex ? 'selected' : ''}`}
+                  onClick={() => handleSelectSuggestion(item)}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                  role="option"
+                  aria-selected={idx === selectedIndex}
+                >
+                  <div className="suggestion-icon">
+                    {getSuggestionIcon(item.type)}
+                  </div>
+                  <div className="suggestion-content">
+                    <div className="suggestion-title-row">
+                      <span className="suggestion-label">{item.label}</span>
+                      {item.floor !== undefined && item.floor > 0 && (
+                        <span className="suggestion-floor-badge">{item.floor}F</span>
+                      )}
+                      {item.floor === 0 && item.label.startsWith("A-") && (
+                        <span className="suggestion-floor-badge" style={{ background: "rgba(56,189,248,0.15)", color: "#38bdf8", borderColor: "rgba(56,189,248,0.3)" }}>GF</span>
+                      )}
+                    </div>
+                    <span className="suggestion-type">{getSuggestionTypeLabel(item.type)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Response Box */}
         {response && (
@@ -556,6 +729,8 @@ function App() {
               routeResult={routeResult}
               startNode={null}
               alternativePaths={alternativePaths}
+              currentFloor={currentFloor}
+              onFloorChange={setCurrentFloor}
             />
           )}
 
@@ -577,6 +752,8 @@ function App() {
                   routeResult={routeResult}
                   startNode={null}
                   alternativePaths={alternativePaths}
+                  currentFloor={currentFloor}
+                  onFloorChange={setCurrentFloor}
                 />
               </div>
               <div className="split-view-ar" style={{ height: "480px", position: "relative", borderRadius: "16px", overflow: "hidden" }}>

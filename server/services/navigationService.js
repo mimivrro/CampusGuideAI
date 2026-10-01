@@ -34,6 +34,36 @@ for (const [a, b, cost] of edges) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Get nodes with floor-adjusted labels (e.g. A-002 -> A-102 on floor 1, A-202 on floor 2).
+ * Follows the Campus 25 floor room numbering convention.
+ */
+export function getNodesByFloor(floor = 0) {
+  const filtered = {};
+  for (const [id, node] of Object.entries(nodes)) {
+    const newNode = { ...node, baseLabel: node.label, floor };
+    if (newNode.label && newNode.label.match(/^[A-Z]-\d{3}$/)) {
+      const match = newNode.label.match(/^([A-Z])-(\d{3})$/);
+      if (match) {
+        const block = match[1];
+        const roomNumber = parseInt(match[2], 10);
+        if (floor === 0) {
+          newNode.label = `${block}-${roomNumber.toString().padStart(3, '0')}`;
+        } else {
+          const newRoomNumber = (floor * 100) + roomNumber;
+          newNode.label = `${block}-${newRoomNumber.toString().padStart(3, '0')}`;
+        }
+      }
+    }
+    filtered[id] = newNode;
+  }
+  return filtered;
+}
+
+function normalizeQuery(s) {
+  return (s || '').toLowerCase().replace(/[\s\-_]+/g, '');
+}
+
+/**
  * Find a node by exact label (case-insensitive).
  * Returns { nodeId, node } or null.
  */
@@ -125,8 +155,9 @@ function findByType(typeQuery) {
  * Main node resolver — tries strategies in order:
  * 1. Exact node ID (e.g. "node_1007")
  * 2. Exact label match
- * 3. Partial label match
- * 4. Semantic type/category
+ * 3. Search across all floors (handles "102", "103", "201", "A102", "B 103", "C 201")
+ * 4. Partial label match
+ * 5. Semantic type/category
  *
  * Returns { nodeId, node } for the best single match, or null.
  * For "find nearest" use-cases, returns an array via findCandidates().
@@ -142,7 +173,21 @@ export function resolveNode(query) {
   const exact = findByExactLabel(q);
   if (exact) return exact;
 
-  // 3. Partial label — prefer shorter label (more specific)
+  // 3. Search across all floors (handles "102", "103", "201", "A102", "B 103", "C 201")
+  const matches = searchNodes(q);
+  if (matches.length > 0 && matches[0].score >= 700) {
+    const top = matches[0];
+    return {
+      nodeId: top.nodeId,
+      node: {
+        ...nodes[top.nodeId],
+        label: top.label,
+        floor: top.floor,
+      },
+    };
+  }
+
+  // 4. Partial label — prefer shorter label (more specific)
   const partial = findByPartialLabel(q);
   if (partial.length === 1) return partial[0];
   if (partial.length > 1) {
@@ -151,7 +196,7 @@ export function resolveNode(query) {
     return partial[0];
   }
 
-  // 4. Type / semantic category — return first match (use findCandidates for nearest)
+  // 5. Type / semantic category — return first match (use findCandidates for nearest)
   const byType = findByType(q);
   if (byType.length > 0) return byType[0];
 
@@ -168,6 +213,14 @@ export function findCandidates(query) {
 
   const exact = findByExactLabel(q);
   if (exact) return [exact];
+
+  const matches = searchNodes(q);
+  if (matches.length > 0 && matches[0].score >= 700) {
+    return matches.map(m => ({
+      nodeId: m.nodeId,
+      node: { ...nodes[m.nodeId], label: m.label, floor: m.floor }
+    }));
+  }
 
   const partial = findByPartialLabel(q);
   if (partial.length > 0) return partial;
@@ -371,7 +424,7 @@ function generateTurnInstructions(route) {
   return instructions;
 }
 
-export function buildRouteResult(startNodeId, destNodeId, path, distance) {
+export function buildRouteResult(startNodeId, destNodeId, path, distance, overrideLabel = null) {
   const destNode = nodes[destNodeId];
   const METERS_PER_UNIT = 0.05;
   const STEP_LENGTH_M = 0.75;
@@ -400,7 +453,7 @@ export function buildRouteResult(startNodeId, destNodeId, path, distance) {
     success: true,
     destination: {
       nodeId: destNodeId,
-      label: destNode.label,
+      label: overrideLabel || destNode.label,
       type: destNode.type,
       x: destNode.x,
       y: destNode.y,
@@ -454,7 +507,7 @@ export function calculateRoute(startNodeId, destinationQuery) {
 
   // Same node
   if (destId === startNodeId) {
-    return buildRouteResult(startNodeId, destId, [startNodeId], 0);
+    return buildRouteResult(startNodeId, destId, [startNodeId], 0, resolved.node?.label);
   }
 
   // Run Dijkstra
@@ -466,7 +519,7 @@ export function calculateRoute(startNodeId, destinationQuery) {
     };
   }
 
-  return buildRouteResult(startNodeId, destId, result.path, result.distance);
+  return buildRouteResult(startNodeId, destId, result.path, result.distance, resolved.node?.label);
 }
 
 /**
@@ -479,12 +532,59 @@ export function getNodeDetails(nodeId) {
 }
 
 /**
- * List all named (non-corridor) nodes — used by AI search tool.
+ * List all matching named nodes — searches across all floors and aliases.
+ * Supports:
+ * - Room numbers: "102", "103", "201"
+ * - Block + room: "A102", "A 102", "A-102", "B 103", "C 201"
+ * - Base labels: "A-001", "A-007"
+ * - Amenities: "library", "lift", "washroom", "cafe", "stairs"
+ * - Node IDs: "node_1001"
  */
 export function searchNodes(query) {
-  const q = query.trim().toLowerCase();
-  return Object.entries(nodes)
-    .filter(([, node]) => node.label && node.label.toLowerCase().includes(q))
-    .map(([nodeId, node]) => ({ nodeId, label: node.label, type: node.type }))
-    .slice(0, 10); // cap at 10 results
+  if (!query || !query.trim()) return [];
+  const rawQ = query.trim().toLowerCase();
+  const normQ = normalizeQuery(query);
+
+  const results = [];
+  const seen = new Set();
+
+  for (const floor of [0, 1, 2, 3]) {
+    const floorNodes = getNodesByFloor(floor);
+    for (const [nodeId, node] of Object.entries(floorNodes)) {
+      if (node.type === 'corridor') continue;
+
+      const rawLabel = (node.label || '').toLowerCase();
+      const normLabel = normalizeQuery(node.label);
+      const roomNumMatch = node.label.match(/\d{3}/);
+      const roomNum = roomNumMatch ? roomNumMatch[0] : '';
+      const rawType = (node.type || '').replace(/_/g, ' ').toLowerCase();
+
+      let score = 0;
+
+      if (normLabel === normQ) score = 1000;
+      else if (roomNum && roomNum === normQ) score = 950;
+      else if (normLabel.startsWith(normQ)) score = 900;
+      else if (normLabel.includes(normQ)) score = 800;
+      else if (rawLabel.includes(rawQ)) score = 750;
+      else if (rawType.includes(rawQ)) score = 600;
+      else if (rawQ.startsWith('node') && nodeId.toLowerCase().includes(rawQ)) score = 500;
+
+      if (score > 0) {
+        const key = `${nodeId}-${node.label}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push({
+            nodeId,
+            label: node.label,
+            type: node.type,
+            floor,
+            score,
+          });
+        }
+      }
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+  return results.slice(0, 15);
 }

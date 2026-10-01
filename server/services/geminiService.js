@@ -28,7 +28,7 @@ import {
 } from './navigationService.js';
 
 // ─── Model config ────────────────────────────────────────────────────────────
-const MODEL_TEXT = process.env.GEMINI_TEXT_MODEL;
+const MODEL_TEXT = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 const MAX_TOOL_ROUNDS = 5; // prevent infinite function-call loops
 
 // ─── Lazy AI client init ─────────────────────────────────────────────────────

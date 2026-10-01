@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { body, validationResult } from 'express-validator';
 import { chatWithCampusAI } from '../services/geminiService.js';
+import { calculateRoute, searchNodes } from '../services/navigationService.js';
 import { aiLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
@@ -57,43 +58,45 @@ router.post(
     try {
       const result = await chatWithCampusAI(message, currentNodeId);
 
-      res.json({
+      return res.json({
         success: true,
         reply: result.reply,
         routeResult: result.routeResult ?? null,
       });
     } catch (err) {
-      console.error('[AI] chatWithCampusAI error:', err.message);
+      console.warn('[AI] chatWithCampusAI error, falling back to local campus engine:', err.message);
 
-      // Surface a friendly message based on error type
-      if (err.message.includes('GEMINI_API_KEY')) {
-        return res.status(503).json({
-          success: false,
-          error: 'The AI service is not configured yet. Please add your Gemini API key to server/.env.',
-          code: 'AI_NOT_CONFIGURED',
+      // Intelligent local fallback: calculate route directly if possible
+      try {
+        const routeResult = calculateRoute(currentNodeId, message);
+        if (routeResult?.success) {
+          const destName = routeResult.destination?.label || routeResult.destination?.type || 'destination';
+          const landmarks = routeResult.landmarks?.length ? ` Landmarks on path: ${routeResult.landmarks.join(', ')}.` : '';
+          return res.json({
+            success: true,
+            reply: `Destination found: **${destName}** (${routeResult.estimatedMinutes} min walk, ${routeResult.distance} units).${landmarks}`,
+            routeResult,
+          });
+        }
+      } catch (calcErr) {
+        // Fall through to location suggestions
+      }
+
+      // Check for matching locations
+      const matches = searchNodes(message);
+      if (matches.length > 0) {
+        const names = matches.map(m => m.label).slice(0, 4).join(', ');
+        return res.json({
+          success: true,
+          reply: `I found these matching campus locations: ${names}. Try searching for one of them or use the quick buttons below.`,
+          routeResult: null,
         });
       }
 
-      if (err.message.includes('quota') || err.message.includes('429')) {
-        return res.status(429).json({
-          success: false,
-          error: 'AI quota exceeded. Please wait a moment and try again.',
-          code: 'AI_QUOTA_EXCEEDED',
-        });
-      }
-
-      if (err.message.includes('API_KEY_INVALID') || err.message.includes('401')) {
-        return res.status(503).json({
-          success: false,
-          error: 'Invalid Gemini API key. Please check server/.env.',
-          code: 'AI_KEY_INVALID',
-        });
-      }
-
-      res.status(503).json({
-        success: false,
-        error: 'The AI service is temporarily unavailable. You can still use the quick navigation buttons.',
-        code: 'AI_UNAVAILABLE',
+      return res.json({
+        success: true,
+        reply: `Could not find "${message}". Try searching for classrooms like "102", "B 103", or facilities like "library", "nearest lift", "cafeteria".`,
+        routeResult: null,
       });
     }
   }
