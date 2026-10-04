@@ -175,7 +175,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         if (state === 'granted') {
           setMotionSensorActive(true);
         } else {
-          alert("Motion sensor permission denied. You can tap 'Take Step' to walk along the route.");
+          alert("Motion sensor permission denied. You can tap 'Step Forward' to walk along the route.");
         }
       } catch (err) {
         console.warn("Motion permission request failed:", err);
@@ -259,16 +259,19 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
     // 3. Floating 3D Directional Arrow Cue
     const arrowGroup = new THREE.Group();
+    arrowGroup.frustumCulled = false;
+
     const arrowGeo = new THREE.ConeGeometry(0.35, 1.1, 16);
     arrowGeo.rotateX(Math.PI / 2);
     const arrowMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
       emissive: 0x0284c7,
-      emissiveIntensity: 0.8,
-      metalness: 0.4,
-      roughness: 0.2
+      emissiveIntensity: 1.0,
+      metalness: 0.3,
+      roughness: 0.1
     });
     const arrowMesh = new THREE.Mesh(arrowGeo, arrowMat);
+    arrowMesh.frustumCulled = false;
     arrowGroup.add(arrowMesh);
 
     const arrowRingGeo = new THREE.RingGeometry(0.4, 0.6, 32);
@@ -277,18 +280,21 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       color: 0x38bdf8,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.7
+      opacity: 0.85
     });
     const arrowRing = new THREE.Mesh(arrowRingGeo, arrowRingMat);
     arrowRing.position.y = -0.3;
+    arrowRing.frustumCulled = false;
     arrowGroup.add(arrowRing);
 
-    arrowGroup.position.set(0, 0.9, -2.5);
+    arrowGroup.position.set(0, 0.9, -2.0);
     scene.add(arrowGroup);
     arrowMeshRef.current = arrowGroup;
 
     // 4. Blue Dot Marker (Start Node)
     const blueGroup = new THREE.Group();
+    blueGroup.frustumCulled = false;
+
     const blueSphereGeo = new THREE.SphereGeometry(0.4, 24, 24);
     const blueSphereMat = new THREE.MeshStandardMaterial({
       color: 0x0284c7,
@@ -299,6 +305,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     });
     const blueSphere = new THREE.Mesh(blueSphereGeo, blueSphereMat);
     blueSphere.position.y = 0.5;
+    blueSphere.frustumCulled = false;
     blueGroup.add(blueSphere);
 
     const blueRingGeo = new THREE.RingGeometry(0.6, 1.0, 32);
@@ -311,6 +318,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     });
     const blueRing = new THREE.Mesh(blueRingGeo, blueRingMat);
     blueRing.position.y = 0.05;
+    blueRing.frustumCulled = false;
     blueGroup.add(blueRing);
 
     scene.add(blueGroup);
@@ -318,6 +326,8 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
     // 5. Red Dot Marker (Destination Node)
     const redGroup = new THREE.Group();
+    redGroup.frustumCulled = false;
+
     const redHeadGeo = new THREE.SphereGeometry(0.5, 24, 24);
     const redHeadMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
@@ -328,12 +338,14 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     });
     const redHead = new THREE.Mesh(redHeadGeo, redHeadMat);
     redHead.position.y = 1.3;
+    redHead.frustumCulled = false;
     redGroup.add(redHead);
 
     const redConeGeo = new THREE.ConeGeometry(0.4, 1.1, 16);
     redConeGeo.rotateX(Math.PI);
     const redCone = new THREE.Mesh(redConeGeo, redHeadMat);
     redCone.position.y = 0.5;
+    redCone.frustumCulled = false;
     redGroup.add(redCone);
 
     const redRingGeo = new THREE.RingGeometry(0.8, 1.4, 32);
@@ -346,6 +358,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     });
     const redRing = new THREE.Mesh(redRingGeo, redRingMat);
     redRing.position.y = 0.05;
+    redRing.frustumCulled = false;
     redGroup.add(redRing);
 
     scene.add(redGroup);
@@ -356,13 +369,15 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const pathMaterial = new THREE.MeshStandardMaterial({
       color: 0x34d399,
       emissive: 0x059669,
-      emissiveIntensity: 0.7,
+      emissiveIntensity: 0.9,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.85,
-      roughness: 0.2
+      roughness: 0.2,
+      depthWrite: false
     });
     const pathMesh = new THREE.Mesh(pathGeometry, pathMaterial);
+    pathMesh.frustumCulled = false;
     scene.add(pathMesh);
     pathLineRef.current = pathMesh;
 
@@ -421,7 +436,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const x3d = Math.sin(relAngle) * dist;
     const z3d = -Math.cos(relAngle) * dist;
 
-    return { x: x3d, y: 0.05, z: z3d, dist };
+    return { x: x3d, y: 0.08, z: z3d, dist };
   }, []);
 
   // Calculate current interpolated User Position on Route
@@ -459,7 +474,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       redDotRef.current.position.set(pos3d.x, pos3d.y, pos3d.z);
     }
 
-    // 3. Point Floating 3D Turn Arrow towards Next Waypoint
+    // 3. Point Floating 3D Turn Arrow towards Next Waypoint (Clamped within mobile camera FOV)
     const nextNodeIdx = Math.min(Math.floor(walkProgress) + 1, route.length - 1);
     const nextNode = route[nextNodeIdx];
     if (arrowMeshRef.current && nextNode) {
@@ -467,8 +482,13 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       const angleRad = Math.atan2(pos3d.x, -pos3d.z);
       arrowMeshRef.current.rotation.y = angleRad;
 
-      arrowMeshRef.current.position.x = Math.sin(angleRad) * 2.5;
-      arrowMeshRef.current.position.z = -Math.cos(angleRad) * 2.5;
+      const arrowDist = 2.0; // Fixed distance in front of camera
+      const maxClampedX = 0.65; // Keep inside mobile screen portrait width
+      const targetX = Math.sin(angleRad) * arrowDist;
+      const clampedX = Math.max(-maxClampedX, Math.min(maxClampedX, targetX));
+
+      arrowMeshRef.current.position.x = clampedX;
+      arrowMeshRef.current.position.z = -Math.cos(angleRad) * arrowDist;
     }
 
     // 4. Generate Continuous 3D Floor Pathway Ribbon Mesh (All Route Nodes)
@@ -489,11 +509,19 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           const len = Math.hypot(dirX, dirZ) || 1;
           perpX = -dirZ / len;
           perpZ = dirX / len;
+        } else if (i > 0) {
+          const pPrev = transformToCameraSpace(route[i - 1], userPos, heading);
+          const dirX = p3d.x - pPrev.x;
+          const dirZ = p3d.z - pPrev.z;
+          const len = Math.hypot(dirX, dirZ) || 1;
+          perpX = -dirZ / len;
+          perpZ = dirX / len;
         }
 
+        const yPos = 0.08; // Slightly raised above floor ground plane
         vertices.push(
-          p3d.x - perpX * ribbonWidth, p3d.y, p3d.z - perpZ * ribbonWidth,
-          p3d.x + perpX * ribbonWidth, p3d.y, p3d.z + perpZ * ribbonWidth
+          p3d.x - perpX * ribbonWidth, yPos, p3d.z - perpZ * ribbonWidth,
+          p3d.x + perpX * ribbonWidth, yPos, p3d.z + perpZ * ribbonWidth
         );
       }
 
@@ -504,12 +532,17 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       }
 
       if (vertices.length >= 6) {
-        pathLineRef.current.geometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(vertices, 3)
-        );
-        pathLineRef.current.geometry.setIndex(indices);
-        pathLineRef.current.geometry.computeVertexNormals();
+        // Create fresh geometry & dispose old geometry so WebGL updates GPU buffer reliably on mobile
+        const newGeo = new THREE.BufferGeometry();
+        newGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+        newGeo.setIndex(indices);
+        newGeo.computeVertexNormals();
+        newGeo.computeBoundingSphere();
+
+        if (pathLineRef.current.geometry) {
+          pathLineRef.current.geometry.dispose();
+        }
+        pathLineRef.current.geometry = newGeo;
       }
     }
   }, [route, walkProgress, heading, transformToCameraSpace, getCurrentUserPos]);
