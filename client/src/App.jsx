@@ -4,6 +4,7 @@ import VoiceAssistant from "./components/VoiceAssistant";
 import ARNavigation from "./components/ARNavigation";
 import { getRoute, getNearest, getAlternatives, searchLocations } from "./services/navigationApi";
 import { searchLocalLocations } from "./services/locationSearch";
+import { resolveClientNode } from "./services/clientNavigationEngine";
 import { API_BASE } from "./config";
 
 const DEFAULT_NODE_ID = "node_1005"; // A-Block Entrance
@@ -77,6 +78,211 @@ const QUICK_OPTIONS = [
   { label: "Washrooms",      icon: POI_ICONS.washroom,  query: "nearest washroom" },
 ];
 
+function getSuggestionIcon(type) {
+  if (type === "classroom") return POI_ICONS.classroom;
+  if (type === "lab") return POI_ICONS.lab;
+  if (type === "lift") return POI_ICONS.lift;
+  if (type === "stairs") return POI_ICONS.stairs;
+  if (type === "washroom_gents" || type === "washroom_ladies") return POI_ICONS.washroom;
+  if (type === "cafeteria") return POI_ICONS.cafeteria;
+  if (type === "seating") return POI_ICONS.library;
+  if (type === "office") return POI_ICONS.faculty;
+  return POI_ICONS.classroom;
+}
+
+function getSuggestionTypeLabel(type) {
+  if (type === "washroom_gents") return "Gents Washroom";
+  if (type === "washroom_ladies") return "Ladies Washroom";
+  if (type === "seating") return "Library / Seating";
+  return type ? type.replace(/_/g, " ") : "Location";
+}
+
+function LocationSearchInput({
+  id,
+  value,
+  onChange,
+  onSelect,
+  onSubmit,
+  placeholder,
+  disabled,
+  leadingDotClass,
+  leadingDotTitle,
+  trailingActions,
+  inputRef,
+}) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const internalInputRef = useRef(null);
+  const activeInputRef = inputRef || internalInputRef;
+  const dropdownRef = useRef(null);
+
+  // Close suggestions dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (
+        activeInputRef.current &&
+        !activeInputRef.current.contains(e.target) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target)
+      ) {
+        setShowSuggestions(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [activeInputRef]);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    onChange(val);
+    setSelectedIndex(-1);
+    if (!val.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    // Instant local search
+    const local = searchLocalLocations(val);
+    setSuggestions(local);
+    setShowSuggestions(local.length > 0);
+
+    // Also fetch from API in background to ensure sync
+    searchLocations(val).then((data) => {
+      if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
+        setSuggestions(data.results);
+        setShowSuggestions(true);
+      }
+    }).catch(() => {});
+  };
+
+  const handleSelectSuggestion = (item) => {
+    setShowSuggestions(false);
+    setSelectedIndex(-1);
+    onSelect(item);
+  };
+
+  const handleKeyDown = (e) => {
+    if (showSuggestions && suggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowSuggestions(false);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+          handleSelectSuggestion(suggestions[selectedIndex]);
+          return;
+        }
+        setShowSuggestions(false);
+        if (onSubmit) onSubmit();
+        return;
+      }
+    }
+
+    if (e.key === "Enter") {
+      setShowSuggestions(false);
+      if (onSubmit) onSubmit();
+    }
+  };
+
+  return (
+    <div className="search-bar-wrapper">
+      <div className="search-container">
+        {leadingDotClass && (
+          <span
+            className={`location-indicator-dot ${leadingDotClass}`}
+            title={leadingDotTitle || ""}
+          />
+        )}
+        <input
+          id={id}
+          ref={activeInputRef}
+          type="text"
+          className="search-input"
+          value={value}
+          onChange={handleInputChange}
+          onFocus={() => {
+            if (value.trim().length > 0 && suggestions.length > 0) {
+              setShowSuggestions(true);
+            }
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck="false"
+        />
+
+        {value && (
+          <button
+            type="button"
+            className="search-clear-btn"
+            onClick={() => {
+              onChange("");
+              setSuggestions([]);
+              setShowSuggestions(false);
+              activeInputRef.current?.focus();
+            }}
+            title="Clear search"
+            aria-label="Clear search input"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        )}
+
+        {trailingActions}
+      </div>
+
+      {showSuggestions && suggestions.length > 0 && (
+        <div ref={dropdownRef} className="suggestions-dropdown" role="listbox">
+          {suggestions.map((item, idx) => (
+            <div
+              key={`${item.nodeId}-${item.label}-${item.floor ?? 0}`}
+              className={`suggestion-item ${idx === selectedIndex ? 'selected' : ''}`}
+              onClick={() => handleSelectSuggestion(item)}
+              onMouseEnter={() => setSelectedIndex(idx)}
+              role="option"
+              aria-selected={idx === selectedIndex}
+            >
+              <div className="suggestion-icon">
+                {getSuggestionIcon(item.type)}
+              </div>
+              <div className="suggestion-content">
+                <div className="suggestion-title-row">
+                  <span className="suggestion-label">{item.label}</span>
+                  {item.floor !== undefined && item.floor > 0 && (
+                    <span className="suggestion-floor-badge">{item.floor}F</span>
+                  )}
+                  {item.floor === 0 && item.label.startsWith("A-") && (
+                    <span className="suggestion-floor-badge" style={{ background: "rgba(56,189,248,0.15)", color: "#38bdf8", borderColor: "rgba(56,189,248,0.3)" }}>GF</span>
+                  )}
+                </div>
+                <span className="suggestion-type">{getSuggestionTypeLabel(item.type)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 async function aiChat(message, currentNodeId) {
   let res;
   try {
@@ -119,40 +325,19 @@ function formatTimeAndSteps(steps, timeSeconds) {
 
 function App() {
   const [currentNodeId, setCurrentNodeId] = useState(DEFAULT_NODE_ID);
+  const [startPoint, setStartPoint] = useState("");
+  const [question, setQuestion] = useState("");
   const [routeResult, setRouteResult] = useState(null);
   const [alternativePaths, setAlternativePaths] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  const [question, setQuestion] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(-1);
   const [currentFloor, setCurrentFloor] = useState(0);
-  const searchInputRef = useRef(null);
-  const dropdownRef = useRef(null);
 
   const [response, setResponse] = useState("");
   const [showVoice, setShowVoice] = useState(false);
   const [showPoisModal, setShowPoisModal] = useState(false);
   const [showArModal, setShowArModal] = useState(false);
-  const [viewMode, setViewMode] = useState("2d"); // "2d" | "ar" | "split"
-
-  // Close suggestions dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(e) {
-      if (
-        searchInputRef.current &&
-        !searchInputRef.current.contains(e.target) &&
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target)
-      ) {
-        setShowSuggestions(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  const [viewMode, setViewMode] = useState("2d"); // "2d" | "ar"
 
   // Theme state: "dark" | "light" | "system"
   const [themeMode, setThemeMode] = useState(() => {
@@ -220,32 +405,127 @@ function App() {
     }
   }, []);
 
-  const navigate = useCallback(async (destinationQuery) => {
-    if (!destinationQuery.trim()) return;
+  // Resolve current active start node and label
+  const resolvedStartInfo = (() => {
+    if (startPoint.trim()) {
+      const resolved = resolveClientNode(startPoint.trim());
+      if (resolved && resolved.node) {
+        return {
+          nodeId: resolved.nodeId,
+          label: resolved.node.label || startPoint.trim(),
+          node: resolved.node,
+        };
+      }
+      return {
+        nodeId: null,
+        label: startPoint.trim(),
+        node: null,
+      };
+    }
+    return {
+      nodeId: DEFAULT_NODE_ID,
+      label: "A-Block Entrance",
+      node: { x: 841, y: 1169, label: "A-Block Entrance", type: "entrance" },
+    };
+  })();
+
+  const activeStartLabel = resolvedStartInfo.label;
+  const activeStartNodeObj = resolvedStartInfo.node
+    ? {
+        nodeId: resolvedStartInfo.nodeId || DEFAULT_NODE_ID,
+        label: resolvedStartInfo.label,
+        x: resolvedStartInfo.node.x ?? 841,
+        y: resolvedStartInfo.node.y ?? 1169,
+        type: resolvedStartInfo.node.type ?? "entrance",
+      }
+    : {
+        nodeId: DEFAULT_NODE_ID,
+        label: "A-Block Entrance",
+        x: 841,
+        y: 1169,
+        type: "entrance",
+      };
+
+  const navigate = useCallback(async (destinationQuery, customStartQuery) => {
+    const destQ = (destinationQuery !== undefined ? destinationQuery : question).trim();
+    const startQ = (customStartQuery !== undefined ? customStartQuery : startPoint).trim();
+
+    if (!destQ) {
+      const emptyDestMsg = "Please enter a destination.";
+      setError(emptyDestMsg);
+      setResponse("Please enter a destination to navigate to.");
+      setRouteResult(null);
+      setAlternativePaths([]);
+      return;
+    }
+
+    // 1. Resolve start node (fallback to default if empty)
+    let activeStartId = DEFAULT_NODE_ID;
+    let activeStartLabelStr = "A-Block Entrance";
+
+    if (startQ) {
+      const resolvedStart = resolveClientNode(startQ);
+      if (!resolvedStart) {
+        const errorMsg = `Start location not found: "${startQ}". Check the room label or try a category like "library", "lift", "washroom".`;
+        setError(errorMsg);
+        setResponse(errorMsg);
+        setRouteResult(null);
+        setAlternativePaths([]);
+        return;
+      }
+      activeStartId = resolvedStart.nodeId;
+      activeStartLabelStr = resolvedStart.node?.label || startQ;
+    }
+
+    // 2. Pre-validate start != destination
+    const nearestMatch = destQ.match(/^nearest\s+(.+)$/i);
+    if (!nearestMatch) {
+      const resolvedDest = resolveClientNode(destQ);
+      if (resolvedDest && resolvedDest.nodeId === activeStartId) {
+        const sameLocMsg = `Start and destination cannot be the same location (${resolvedDest.node?.label || activeStartLabelStr}).`;
+        setError(sameLocMsg);
+        setResponse(sameLocMsg);
+        setRouteResult(null);
+        setAlternativePaths([]);
+        return;
+      }
+    }
+
     setIsLoading(true);
     setError(null);
     setResponse("");
     setAlternativePaths([]);
+    setCurrentNodeId(activeStartId);
 
     try {
       let result;
-      const nearestMatch = destinationQuery.match(/^nearest\s+(.+)$/i);
       if (nearestMatch) {
-        result = await getNearest(nearestMatch[1].trim(), currentNodeId);
+        result = await getNearest(nearestMatch[1].trim(), activeStartId);
       } else {
-        result = await getRoute(currentNodeId, destinationQuery);
+        result = await getRoute(activeStartId, destQ);
       }
+
+      // Check if nearest resolved to the start location
+      if (result.destination?.nodeId === activeStartId) {
+        const sameLocMsg = `Start and destination cannot be the same location (${activeStartLabelStr}).`;
+        setError(sameLocMsg);
+        setResponse(sameLocMsg);
+        setRouteResult(null);
+        setAlternativePaths([]);
+        return;
+      }
+
       setRouteResult(result);
 
-      const destLabel = result.destination?.label || result.destination?.type || destinationQuery;
+      const destLabel = result.destination?.label || result.destination?.type || destQ;
       const timingInfo = formatTimeAndSteps(result.steps, result.timeSeconds);
       setResponse(
-        `Destination found: **${destLabel}** (${timingInfo}, ${result.distance} units).` +
+        `Route calculated from **${activeStartLabelStr}** to **${destLabel}** (${timingInfo}, ${result.distance} units).` +
         (result.landmarks?.length ? ` Landmarks on path: ${result.landmarks.join(", ")}.` : "")
       );
 
-      const startNodeId = result.route?.[0]?.nodeId || currentNodeId;
-      const targetQuery = result.destination?.label || destinationQuery;
+      const startNodeId = result.route?.[0]?.nodeId || activeStartId;
+      const targetQuery = result.destination?.label || destQ;
       await fetchAndSetAlternatives(startNodeId, targetQuery, result.destination?.label, result);
     } catch (err) {
       const msg = err.message || "Navigation failed.";
@@ -256,7 +536,49 @@ function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentNodeId, fetchAndSetAlternatives]);
+  }, [question, startPoint, fetchAndSetAlternatives]);
+
+  const handleSwap = useCallback(() => {
+    const currentStart = startPoint.trim();
+    const currentDest = question.trim();
+
+    // The new start is the previous destination
+    const newStart = currentDest;
+    // The new destination is previous start (or default if it was empty)
+    const newDest = currentStart || "A-Block Entrance";
+
+    setStartPoint(newStart);
+    setQuestion(newDest);
+
+    if (newDest.trim()) {
+      navigate(newDest, newStart);
+    }
+  }, [startPoint, question, navigate]);
+
+  const handleSelectDestinationSuggestion = useCallback((suggestion) => {
+    setQuestion(suggestion.label);
+    if (suggestion.floor !== undefined) {
+      setCurrentFloor(suggestion.floor);
+    }
+    navigate(suggestion.label, startPoint);
+  }, [navigate, startPoint]);
+
+  const handleSelectStartSuggestion = useCallback((suggestion) => {
+    setStartPoint(suggestion.label);
+    setCurrentNodeId(suggestion.nodeId);
+    if (suggestion.floor !== undefined) {
+      setCurrentFloor(suggestion.floor);
+    }
+    if (question.trim()) {
+      navigate(question, suggestion.label);
+    }
+  }, [navigate, question]);
+
+  const handleSend = () => {
+    if (!isLoading) {
+      navigate(question, startPoint);
+    }
+  };
 
   const askAI = useCallback(async (message) => {
     if (!message.trim()) return;
@@ -283,7 +605,7 @@ function App() {
     } catch (err) {
       // If AI is unavailable (e.g. Gemini key not configured), fall back to direct navigation
       try {
-        await navigate(message);
+        await navigate(message, startPoint);
       } catch {
         const msg = err.message || "AI request failed.";
         setError(msg);
@@ -293,103 +615,7 @@ function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentNodeId, fetchAndSetAlternatives, navigate]);
-
-  const handleInputChange = (e) => {
-    const val = e.target.value;
-    setQuestion(val);
-    setSelectedIndex(-1);
-    if (!val.trim()) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    // Instant local search
-    const local = searchLocalLocations(val);
-    setSuggestions(local);
-    setShowSuggestions(local.length > 0);
-
-    // Also fetch from API in background to ensure sync
-    searchLocations(val).then((data) => {
-      if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
-        setSuggestions(data.results);
-        setShowSuggestions(true);
-      }
-    }).catch(() => {});
-  };
-
-  const handleSelectSuggestion = useCallback((suggestion) => {
-    setQuestion(suggestion.label);
-    setShowSuggestions(false);
-    setSelectedIndex(-1);
-    if (suggestion.floor !== undefined) {
-      setCurrentFloor(suggestion.floor);
-    }
-    navigate(suggestion.label);
-  }, [navigate]);
-
-  const handleSend = () => {
-    const q = question.trim();
-    if (q && !isLoading) {
-      setShowSuggestions(false);
-      navigate(q);
-    }
-  };
-
-  const handleKeyDown = (e) => {
-    if (showSuggestions && suggestions.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : -1));
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setShowSuggestions(false);
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (selectedIndex >= 0 && suggestions[selectedIndex]) {
-          handleSelectSuggestion(suggestions[selectedIndex]);
-          return;
-        }
-        setShowSuggestions(false);
-        handleSend();
-        return;
-      }
-    }
-
-    if (e.key === "Enter") {
-      setShowSuggestions(false);
-      handleSend();
-    }
-  };
-
-  const getSuggestionIcon = (type) => {
-    if (type === "classroom") return POI_ICONS.classroom;
-    if (type === "lab") return POI_ICONS.lab;
-    if (type === "lift") return POI_ICONS.lift;
-    if (type === "stairs") return POI_ICONS.stairs;
-    if (type === "washroom_gents" || type === "washroom_ladies") return POI_ICONS.washroom;
-    if (type === "cafeteria") return POI_ICONS.cafeteria;
-    if (type === "seating") return POI_ICONS.library;
-    if (type === "office") return POI_ICONS.faculty;
-    return POI_ICONS.classroom;
-  };
-
-  const getSuggestionTypeLabel = (type) => {
-    if (type === "washroom_gents") return "Gents Washroom";
-    if (type === "washroom_ladies") return "Ladies Washroom";
-    if (type === "seating") return "Library / Seating";
-    return type ? type.replace(/_/g, " ") : "Location";
-  };
+  }, [currentNodeId, fetchAndSetAlternatives, navigate, startPoint]);
 
   const renderResponse = (text) => {
     const parts = text.split(/\*\*(.+?)\*\*/g);
@@ -534,112 +760,88 @@ function App() {
           <div className="header-meta-pills">
             <span className="meta-pill">190 Nodes</span>
             <span className="meta-pill">165 Corridors</span>
-            <span className="meta-pill">Start: A-Block Entrance</span>
+            <span className="meta-pill">Start: {activeStartLabel}</span>
           </div>
         </header>
 
-        {/* Search Bar with Autocomplete Suggestions */}
+        {/* Dual Location Inputs (Start & Destination) with Autocomplete & Swap */}
         <div className="search-bar-wrapper">
-          <section id="search-section" className="search-container">
-            <input
-              ref={searchInputRef}
-              type="text"
-              className="search-input"
-              value={question}
-              onChange={handleInputChange}
-              onFocus={() => {
-                if (question.trim().length > 0 && suggestions.length > 0) {
-                  setShowSuggestions(true);
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder="Search room or location (e.g. 102, B 103, Library)..."
+          <section id="search-section" className="nav-inputs-wrapper">
+            <LocationSearchInput
+              id="start-location-input"
+              placeholder="Choose start point (default: A-Block Entrance)..."
+              value={startPoint}
+              onChange={setStartPoint}
+              onSelect={handleSelectStartSuggestion}
+              onSubmit={handleSend}
               disabled={isLoading}
-              autoComplete="off"
-              spellCheck="false"
+              leadingDotClass="start-dot"
+              leadingDotTitle="Start Point"
             />
 
-            {question && (
+            <div className="nav-swap-divider">
+              <div className="nav-swap-line" />
               <button
                 type="button"
-                className="search-clear-btn"
-                onClick={() => {
-                  setQuestion("");
-                  setSuggestions([]);
-                  setShowSuggestions(false);
-                  searchInputRef.current?.focus();
-                }}
-                title="Clear search"
-                aria-label="Clear search"
+                className="nav-swap-btn"
+                onClick={handleSwap}
+                title="Swap start and destination"
+                aria-label="Swap start and destination"
+                disabled={isLoading}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 16V4M7 4L3 8M7 4L11 8M17 8v12M17 20l4-4M17 20l-4-4" />
                 </svg>
+                <span>Swap</span>
               </button>
-            )}
-
-            <button
-              className={`action-btn action-btn-voice ${showVoice ? 'active' : ''}`}
-              title="Voice Assistant"
-              onClick={() => setShowVoice((prev) => !prev)}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                <line x1="12" x2="12" y1="19" y2="22"/>
-              </svg>
-            </button>
-
-            <button
-              className="action-btn action-btn-primary"
-              onClick={handleSend}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                "..."
-              ) : (
-                <>
-                  <span className="nav-btn-text">Navigate</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M5 12h14M12 5l7 7-7 7"/>
-                  </svg>
-                </>
-              )}
-            </button>
-          </section>
-
-          {/* Autocomplete Suggestions Dropdown */}
-          {showSuggestions && suggestions.length > 0 && (
-            <div ref={dropdownRef} className="suggestions-dropdown" role="listbox">
-              {suggestions.map((item, idx) => (
-                <div
-                  key={`${item.nodeId}-${item.label}-${item.floor ?? 0}`}
-                  className={`suggestion-item ${idx === selectedIndex ? 'selected' : ''}`}
-                  onClick={() => handleSelectSuggestion(item)}
-                  onMouseEnter={() => setSelectedIndex(idx)}
-                  role="option"
-                  aria-selected={idx === selectedIndex}
-                >
-                  <div className="suggestion-icon">
-                    {getSuggestionIcon(item.type)}
-                  </div>
-                  <div className="suggestion-content">
-                    <div className="suggestion-title-row">
-                      <span className="suggestion-label">{item.label}</span>
-                      {item.floor !== undefined && item.floor > 0 && (
-                        <span className="suggestion-floor-badge">{item.floor}F</span>
-                      )}
-                      {item.floor === 0 && item.label.startsWith("A-") && (
-                        <span className="suggestion-floor-badge" style={{ background: "rgba(56,189,248,0.15)", color: "#38bdf8", borderColor: "rgba(56,189,248,0.3)" }}>GF</span>
-                      )}
-                    </div>
-                    <span className="suggestion-type">{getSuggestionTypeLabel(item.type)}</span>
-                  </div>
-                </div>
-              ))}
             </div>
-          )}
+
+            <LocationSearchInput
+              id="destination-location-input"
+              placeholder="Search destination (e.g. 102, B 103, Library)..."
+              value={question}
+              onChange={setQuestion}
+              onSelect={handleSelectDestinationSuggestion}
+              onSubmit={handleSend}
+              disabled={isLoading}
+              leadingDotClass="dest-dot"
+              leadingDotTitle="Destination"
+              trailingActions={
+                <>
+                  <button
+                    className={`action-btn action-btn-voice ${showVoice ? 'active' : ''}`}
+                    title="Voice Assistant"
+                    onClick={() => setShowVoice((prev) => !prev)}
+                    type="button"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" x2="12" y1="19" y2="22"/>
+                    </svg>
+                  </button>
+
+                  <button
+                    className="action-btn action-btn-primary"
+                    onClick={handleSend}
+                    disabled={isLoading}
+                    type="button"
+                  >
+                    {isLoading ? (
+                      "..."
+                    ) : (
+                      <>
+                        <span className="nav-btn-text">Navigate</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                      </>
+                    )}
+                  </button>
+                </>
+              }
+            />
+          </section>
         </div>
 
         {/* Response Box */}
@@ -744,18 +946,12 @@ function App() {
             >
               ✨ 3D WebAR (ARCore)
             </button>
-            <button
-              className={`view-mode-tab ${viewMode === "split" ? "active" : ""}`}
-              onClick={() => setViewMode("split")}
-            >
-              📱 Split View
-            </button>
           </div>
 
           {viewMode === "2d" && (
             <CampusMap
               routeResult={routeResult}
-              startNode={null}
+              startNode={activeStartNodeObj}
               alternativePaths={alternativePaths}
               currentFloor={currentFloor}
               onFloorChange={setCurrentFloor}
@@ -771,29 +967,6 @@ function App() {
                 onClose={() => setViewMode("2d")}
                 onNodeSelect={(nodeId) => setCurrentNodeId(nodeId)}
               />
-            </div>
-          )}
-
-          {viewMode === "split" && (
-            <div className="split-view-container">
-              <div className="split-view-map">
-                <CampusMap
-                  routeResult={routeResult}
-                  startNode={null}
-                  alternativePaths={alternativePaths}
-                  currentFloor={currentFloor}
-                  onFloorChange={setCurrentFloor}
-                  onSelectPath={handleSelectAlternative}
-                />
-              </div>
-              <div className="split-view-ar" style={{ height: "480px", position: "relative", borderRadius: "16px", overflow: "hidden" }}>
-                <ARNavigation
-                  routeResult={routeResult}
-                  startNode={currentNodeId}
-                  onClose={() => setViewMode("2d")}
-                  onNodeSelect={(nodeId) => setCurrentNodeId(nodeId)}
-                />
-              </div>
             </div>
           )}
         </section>
@@ -828,7 +1001,8 @@ function App() {
                   key={label}
                   className="poi-card"
                   onClick={() => {
-                    navigate(query);
+                    setQuestion(query);
+                    navigate(query, startPoint);
                     setShowPoisModal(false);
                     scrollToSection("map-section");
                   }}
@@ -865,7 +1039,10 @@ function App() {
               fetchAndSetAlternatives(rr.route[0].nodeId, rr.destination.nodeId, rr);
             }
           }}
-          onNavigate={(query) => navigate(query)}
+          onNavigate={(query) => {
+            setQuestion(query);
+            navigate(query, startPoint);
+          }}
           onClose={() => setShowVoice(false)}
         />
       )}

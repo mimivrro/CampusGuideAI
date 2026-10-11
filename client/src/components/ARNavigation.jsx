@@ -32,6 +32,8 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
   const [stepCount, setStepCount] = useState(0);
   const [motionSensorActive, setMotionSensorActive] = useState(false);
   const [lastStepFeedback, setLastStepFeedback] = useState(false);
+  const [isStepsExpanded, setIsStepsExpanded] = useState(false); // Collapsible drawer: false = kept down (see path), true = kept up (see all steps)
+  const [dismissSimulatedNotice, setDismissSimulatedNotice] = useState(false);
 
   const route = routeResult?.route ?? [];
   const turnInstructions = routeResult?.turnInstructions ?? [];
@@ -576,46 +578,78 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         autoPlay
       />
 
-      {/* Camera Permission Prompt if inactive */}
+      {/* Camera Permission Prompt / Simulated 3D Floor Background */}
       {!cameraActive && (
         <div className="ar-simulated-bg">
           <div className="ar-simulated-grid"></div>
-          <div className="ar-camera-permission-card">
-            <div className="permission-icon">📷</div>
-            <h3>Allow Camera Access</h3>
-            {cameraError && (
-              <div style={{ color: "#f43f5e", fontSize: "0.8rem", fontWeight: 600, background: "rgba(244, 63, 94, 0.1)", border: "1px solid rgba(244, 63, 94, 0.3)", padding: "0.5rem 0.8rem", borderRadius: "8px", width: "100%" }}>
-                ⚠️ {cameraError}
-              </div>
-            )}
 
-            <button
-              className="ar-permission-btn"
-              onClick={() => startCamera(selectedDeviceId)}
-            >
-              📷 Grant Camera Permission
-            </button>
-            {videoDevices.length > 0 && (
-              <div className="permission-device-select">
-                <span>Selected Device: </span>
-                <select
-                  value={selectedDeviceId}
-                  onChange={(e) => {
-                    setSelectedDeviceId(e.target.value);
-                    startCamera(e.target.value);
-                  }}
-                  className="permission-select-dropdown"
+          {!dismissSimulatedNotice ? (
+            <div className="ar-camera-permission-card">
+              <div className="permission-icon">📷</div>
+              <h3>Camera Access</h3>
+              <p className="permission-subtext">
+                Enable camera to project 3D arrows onto real floors, or explore in 3D simulated mode.
+              </p>
+              {cameraError && (
+                <div className="permission-error-box">
+                  ⚠️ {cameraError}
+                  {cameraError.includes("browser context") && (
+                    <div className="permission-error-hint">
+                      (Browser requires HTTPS for camera. You can explore in 3D Simulated Mode below!)
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="permission-actions-group">
+                <button
+                  type="button"
+                  className="ar-permission-btn"
+                  onClick={() => startCamera(selectedDeviceId)}
                 >
-                  <option value="">Auto / Integrated Camera</option>
-                  {videoDevices.map((dev, idx) => (
-                    <option key={dev.deviceId || idx} value={dev.deviceId}>
-                      {dev.label || `Camera ${idx + 1}`}
-                    </option>
-                  ))}
-                </select>
+                  📷 Try Camera Permission
+                </button>
+
+                <button
+                  type="button"
+                  className="ar-simulated-mode-btn"
+                  onClick={() => setDismissSimulatedNotice(true)}
+                >
+                  🎮 View 3D Path on Simulated Floor
+                </button>
               </div>
-            )}
-          </div>
+
+              {videoDevices.length > 0 && (
+                <div className="permission-device-select">
+                  <span>Selected Device: </span>
+                  <select
+                    value={selectedDeviceId}
+                    onChange={(e) => {
+                      setSelectedDeviceId(e.target.value);
+                      startCamera(e.target.value);
+                    }}
+                    className="permission-select-dropdown"
+                  >
+                    <option value="">Auto / Integrated Camera</option>
+                    {videoDevices.map((dev, idx) => (
+                      <option key={dev.deviceId || idx} value={dev.deviceId}>
+                        {dev.label || `Camera ${idx + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="ar-simulated-active-pill"
+              onClick={() => setDismissSimulatedNotice(false)}
+              title="3D Simulated Mode Active. Tap to configure camera"
+            >
+              🎮 3D Simulated Floor Active (Tap for Camera)
+            </button>
+          )}
         </div>
       )}
 
@@ -626,10 +660,10 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       <div className="ar-top-bar">
         <div className="ar-brand-group">
           <div className="ar-status-dot pulse"></div>
-          <div>
-            <div className="ar-title">WebAR Physical Walk Viewport</div>
+          <div className="ar-brand-text">
+            <div className="ar-title">WebAR Walk</div>
             <div className="ar-subtitle">
-              {destination ? `To: ${destination.label || destination.type}` : "AR Real-Step Navigation"}
+              {destination ? `To: ${destination.label || destination.type}` : "AR Navigation"}
             </div>
           </div>
         </div>
@@ -637,16 +671,15 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         <div className="ar-top-actions">
           {videoDevices.length > 0 && (
             <select
-              className="ar-pill-btn"
-              style={{ background: "#1e293b", color: "#ffffff", padding: "0.35rem 0.6rem" }}
+              className="ar-pill-btn ar-select-pill"
               value={selectedDeviceId}
               onChange={(e) => setSelectedDeviceId(e.target.value)}
               title="Select Camera Device"
             >
-              <option value="">🎥 Auto Camera</option>
+              <option value="">🎥 Camera</option>
               {videoDevices.map((dev, idx) => (
                 <option key={dev.deviceId || idx} value={dev.deviceId}>
-                  {dev.label || `Camera ${idx + 1}`}
+                  {dev.label || `Cam ${idx + 1}`}
                 </option>
               ))}
             </select>
@@ -654,17 +687,21 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
           {!cameraActive && (
             <button
-              className="ar-pill-btn"
-              onClick={() => startCamera(selectedDeviceId)}
-              style={{ background: "#0284c7", color: "#ffffff" }}
+              type="button"
+              className="ar-pill-btn ar-camera-btn"
+              onClick={() => {
+                setDismissSimulatedNotice(false);
+                startCamera(selectedDeviceId);
+              }}
               title="Enable Camera Stream"
             >
-              🎥 Enable Camera
+              🎥 <span className="ar-btn-label">Camera</span>
             </button>
           )}
 
           {webXRSupported && (
             <button
+              type="button"
               className={`ar-pill-btn ${xrSessionActive ? 'active' : ''}`}
               onClick={launchWebXR}
               title="Launch Google ARCore WebXR"
@@ -674,14 +711,20 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           )}
 
           <button
-            className="ar-pill-btn"
+            type="button"
+            className="ar-pill-btn ar-anchor-btn"
             onClick={() => setShowAnchorModal(true)}
             title="Recalibrate position anchor"
           >
-            🎯 Snap Anchor
+            🎯 <span className="ar-btn-label">Anchor</span>
           </button>
 
-          <button className="ar-close-btn" onClick={onClose} title="Exit AR View">
+          <button
+            type="button"
+            className="ar-close-btn"
+            onClick={onClose}
+            title="Exit AR View"
+          >
             ✕
           </button>
         </div>
@@ -743,117 +786,231 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         </svg>
       </div>
 
-      {/* Main HUD Instruction Card (Physical Motion Tracking — NO TIMERS) */}
-      <div className="ar-hud-card">
-        {isArrived ? (
-          <div className="hud-content">
-            <div className="hud-icon-box" style={{ background: "rgba(52, 211, 153, 0.2)", borderColor: "#34d399" }}>
-              <span className="hud-action-emoji">🎯</span>
-            </div>
-            <div className="hud-details">
-              <div className="hud-step-tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399" }}>
-                Destination Reached
-              </div>
-              <div className="hud-instruction-text">
-                You have arrived at {destination?.label || destination?.type || "your destination"}!
-              </div>
-            </div>
-          </div>
-        ) : currentStep ? (
-          <div className="hud-content">
-            <div className="hud-icon-box">
-              <span className="hud-action-emoji">
-                {getActionIconSvg(currentStep.action)}
+      {/* Main HUD Instruction Card (Physical Motion Tracking & Collapsible Steps Drawer) */}
+      <div className={`ar-hud-card ${isStepsExpanded ? 'expanded' : 'collapsed'}`}>
+        {/* Drawer Header & Keep Up / Keep Down Toggle Bar */}
+        <div className="hud-drawer-header">
+          <div
+            className="hud-drawer-handle"
+            onClick={() => setIsStepsExpanded((prev) => !prev)}
+            title={isStepsExpanded ? "Keep down to view 3D floor path" : "Keep up to view all route steps"}
+          />
+          <div className="hud-drawer-top-row">
+            <div className="hud-drawer-title-area">
+              <span className="hud-drawer-badge">
+                {isStepsExpanded ? '📋 ALL ROUTE STEPS' : `STEP ${currentStepIndex + 1} OF ${turnInstructions.length || 1}`}
+              </span>
+              <span className="hud-drawer-route-summary">
+                {startLocation?.label || "Start"} → {destination?.label || destination?.type || "Destination"}
               </span>
             </div>
 
-            <div className="hud-details">
-              <div className="hud-step-tag">
-                Physical Step Tracking · Step {currentStepIndex + 1} of {turnInstructions.length || 1}
+            <button
+              type="button"
+              className={`hud-toggle-steps-btn ${isStepsExpanded ? 'active' : ''}`}
+              onClick={() => setIsStepsExpanded((prev) => !prev)}
+              aria-expanded={isStepsExpanded}
+              title={isStepsExpanded ? "Keep down to see camera & floor path" : "Keep up to see all route steps"}
+            >
+              <span className="hud-toggle-arrow">{isStepsExpanded ? '▼' : '▲'}</span>
+              <span className="hud-toggle-label">
+                {isStepsExpanded ? 'Keep Down (View Path)' : `Keep Up (View Steps • ${turnInstructions.length || 0})`}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* When Expanded (Kept Up): Scrollable list of ALL turn-by-turn steps */}
+        {isStepsExpanded ? (
+          <div className="hud-expanded-view">
+            {/* Active step summary banner */}
+            {currentStep && (
+              <div className="hud-active-step-preview">
+                <div className="active-preview-icon">
+                  {getActionIconSvg(currentStep.action)}
+                </div>
+                <div className="active-preview-info">
+                  <div className="active-preview-label">
+                    Current Step ({currentStepIndex + 1}/{turnInstructions.length}):
+                  </div>
+                  <div className="active-preview-text">{currentStep.text}</div>
+                </div>
+                <div className="active-preview-nav">
+                  <button
+                    type="button"
+                    className="step-jump-btn"
+                    disabled={currentStepIndex <= 0}
+                    onClick={() => setWalkProgress(Math.max(0, currentStepIndex - 1))}
+                    title="Previous Step"
+                  >
+                    ◀
+                  </button>
+                  <button
+                    type="button"
+                    className="step-jump-btn"
+                    disabled={currentStepIndex >= turnInstructions.length - 1}
+                    onClick={() => setWalkProgress(Math.min(turnInstructions.length - 1, currentStepIndex + 1))}
+                    title="Next Step"
+                  >
+                    ▶
+                  </button>
+                </div>
               </div>
-              <div className="hud-instruction-text">{currentStep.text}</div>
-              <div className="hud-meta">
-                <span className="hud-chip">
-                  🔵 Start: <strong>{startLocation?.label || "Entrance"}</strong>
-                </span>
-                <span className="hud-chip">
-                  🔴 Target: <strong>{currentStep.targetLabel}</strong>
-                </span>
-                {currentStep.distanceMeters > 0 && (
-                  <span className="hud-chip highlight">
-                    📏 ~{currentStep.distanceMeters} meters
-                  </span>
-                )}
-              </div>
+            )}
+
+            {/* Scrollable list of all steps */}
+            <div className="ar-steps-scroll-container">
+              {turnInstructions.length === 0 ? (
+                <div className="ar-steps-empty">Calculating pathway instructions...</div>
+              ) : (
+                turnInstructions.map((step, idx) => {
+                  const isActive = idx === currentStepIndex;
+                  const isPast = idx < currentStepIndex;
+                  return (
+                    <div
+                      key={step.stepIndex ?? idx}
+                      className={`ar-step-item ${isActive ? 'active' : ''} ${isPast ? 'completed' : ''}`}
+                      onClick={() => setWalkProgress(idx)}
+                      role="button"
+                      tabIndex={0}
+                      title={`Tap to jump navigation to Step ${idx + 1}`}
+                    >
+                      <div className="ar-step-index-pill">
+                        {isPast ? '✓' : idx + 1}
+                      </div>
+                      <div className="ar-step-icon-box">
+                        {getActionIconSvg(step.action)}
+                      </div>
+                      <div className="ar-step-content">
+                        <div className="ar-step-instruction-line">{step.text}</div>
+                        <div className="ar-step-tags">
+                          {step.targetLabel && (
+                            <span className="ar-step-tag target">🎯 {step.targetLabel}</span>
+                          )}
+                          {step.distanceMeters > 0 && (
+                            <span className="ar-step-tag dist">📏 ~{step.distanceMeters}m</span>
+                          )}
+                          {isActive && (
+                            <span className="ar-step-tag active-now">Live Step</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         ) : (
-          <div className="hud-content">
-            <div className="hud-instruction-text">Calculating 3D AR pathway...</div>
-          </div>
+          /* When Kept Down (Collapsed): Compact Current Step HUD Card (Camera & 3D path fully visible) */
+          <>
+            {isArrived ? (
+              <div className="hud-content">
+                <div className="hud-icon-box" style={{ background: "rgba(52, 211, 153, 0.2)", borderColor: "#34d399" }}>
+                  <span className="hud-action-emoji">🎯</span>
+                </div>
+                <div className="hud-details">
+                  <div className="hud-step-tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399" }}>
+                    Destination Reached
+                  </div>
+                  <div className="hud-instruction-text">
+                    You have arrived at {destination?.label || destination?.type || "your destination"}!
+                  </div>
+                </div>
+              </div>
+            ) : currentStep ? (
+              <div className="hud-content">
+                <div className="hud-icon-box">
+                  <span className="hud-action-emoji">
+                    {getActionIconSvg(currentStep.action)}
+                  </span>
+                </div>
+
+                <div className="hud-details">
+                  <div className="hud-step-tag hud-step-tag-desktop">
+                    Step {currentStepIndex + 1} of {turnInstructions.length || 1}
+                  </div>
+                  <div className="hud-instruction-text">{currentStep.text}</div>
+                  <div className="hud-meta">
+                    <span className="hud-chip">
+                      🔵 Start: <strong>{startLocation?.label || "Entrance"}</strong>
+                    </span>
+                    <span className="hud-chip">
+                      🔴 Target: <strong>{currentStep.targetLabel}</strong>
+                    </span>
+                    {currentStep.distanceMeters > 0 && (
+                      <span className="hud-chip highlight">
+                        📏 ~{currentStep.distanceMeters}m
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="hud-content">
+                <div className="hud-instruction-text">Calculating 3D AR pathway...</div>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Real Physical Motion Control Bar (No Timers!) */}
-        <div className="hud-controls-row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-          {/* Live Footstep Pedometer Counter */}
-          <div
-            className={`hud-chip ${lastStepFeedback ? 'highlight' : ''}`}
-            style={{
-              background: lastStepFeedback ? "rgba(52, 211, 153, 0.25)" : "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.2)",
-              padding: "0.4rem 0.8rem",
-              borderRadius: "9999px",
-              fontWeight: 700,
-              color: "#38bdf8",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.35rem"
-            }}
-          >
-            <span>👟 Footsteps: <strong>{stepCount}</strong></span>
-            {motionSensorActive && (
-              <span style={{ fontSize: "0.65rem", color: "#34d399" }}>• Motion Sensor Active</span>
-            )}
+        {/* Real Physical Motion Control Bar (Structured 2-row layout: always fits on mobile without overflow) */}
+        <div className="hud-controls-row">
+          <div className="hud-controls-primary">
+            {/* Live Footstep Pedometer Counter */}
+            <div
+              className={`hud-chip hud-chip-pedometer ${lastStepFeedback ? 'highlight' : ''}`}
+            >
+              <span>👟 Steps: <strong>{stepCount}</strong></span>
+              {motionSensorActive && (
+                <span className="hud-sensor-indicator">• Active</span>
+              )}
+            </div>
+
+            {/* Manual Step Forward Action */}
+            <button
+              type="button"
+              className="hud-nav-btn primary"
+              onClick={() => advanceStep(0.12)}
+              title="Step Forward (advances 1 physical stride along pathway)"
+            >
+              👟 Step Forward
+            </button>
           </div>
 
-          {/* Manual Step Forward Action (advances position 1 footstep manually) */}
-          <button
-            className="hud-nav-btn primary"
-            onClick={() => advanceStep(0.12)}
-            style={{ background: "#0284c7", color: "#ffffff" }}
-            title="Step Forward (advances 1 physical stride along pathway)"
-          >
-            👟 Step Forward
-          </button>
+          <div className="hud-controls-secondary">
+            {!motionSensorActive && (
+              <button
+                type="button"
+                className="hud-icon-btn active"
+                onClick={enableMotionSensor}
+                title="Activate accelerometer step sensor"
+              >
+                📡 Sensor
+              </button>
+            )}
 
-          {!motionSensorActive && (
             <button
-              className="hud-icon-btn active"
-              onClick={enableMotionSensor}
-              title="Activate accelerometer step sensor"
+              type="button"
+              className={`hud-icon-btn ${voiceEnabled ? 'active' : ''}`}
+              onClick={() => {
+                setVoiceEnabled(!voiceEnabled);
+                if (!voiceEnabled && currentStep) speakInstruction(currentStep.text);
+              }}
+              title={voiceEnabled ? "Mute Voice Guidance" : "Enable Voice Guidance"}
             >
-              📡 Enable Motion Sensor
+              {voiceEnabled ? '🔊 Voice' : '🔇 Mute'}
             </button>
-          )}
 
-          <button
-            className={`hud-icon-btn ${voiceEnabled ? 'active' : ''}`}
-            onClick={() => {
-              setVoiceEnabled(!voiceEnabled);
-              if (!voiceEnabled && currentStep) speakInstruction(currentStep.text);
-            }}
-            title={voiceEnabled ? "Mute Voice Guidance" : "Enable Voice Guidance"}
-          >
-            {voiceEnabled ? '🔊 Voice On' : '🔇 Voice Off'}
-          </button>
-
-          <button
-            className={`hud-icon-btn ${autoRotate ? 'active' : ''}`}
-            onClick={() => setAutoRotate(!autoRotate)}
-            title="Toggle Gyro Compass"
-          >
-            🧭 {autoRotate ? 'Gyro Auto' : 'Gyro Manual'}
-          </button>
+            <button
+              type="button"
+              className={`hud-icon-btn ${autoRotate ? 'active' : ''}`}
+              onClick={() => setAutoRotate(!autoRotate)}
+              title="Toggle Gyro Compass"
+            >
+              🧭 {autoRotate ? 'Gyro' : 'Manual'}
+            </button>
+          </div>
         </div>
 
         {/* Manual Orientation Slider fallback */}
