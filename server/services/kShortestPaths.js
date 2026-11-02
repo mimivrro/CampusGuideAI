@@ -6,7 +6,7 @@
  * Returns distinct, loopless paths sorted shortest first.
  */
 
-import { graph, buildRouteResult, resolveNode, findNearest } from './navigationService.js';
+import { graph, buildRouteResult, resolveNode, findNearest, isGenericWashroomQuery } from './navigationService.js';
 import { nodes } from '../data/buildingData.js';
 
 // ---------------------------------------------------------------------------
@@ -167,6 +167,32 @@ export function findKShortestPaths(startId, endId, k = 3) {
 export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3, destinationLabel = null) {
   if (!nodes[startNodeId]) {
     return { success: false, error: `Unknown start node: ${startNodeId}` };
+  }
+
+  // Handle generic washroom query -> Return routes to BOTH Gents and Ladies washrooms
+  if (isGenericWashroomQuery(destinationQuery)) {
+    const gentsResult = findNearest("washroom_gents", startNodeId);
+    const ladiesResult = findNearest("washroom_ladies", startNodeId);
+
+    const paths = [];
+    if (gentsResult) {
+      gentsResult.destination.label = "🚹 Gents Washroom";
+      gentsResult.gender = "gents";
+      paths.push(gentsResult);
+    }
+    if (ladiesResult) {
+      ladiesResult.destination.label = "🚺 Ladies Washroom";
+      ladiesResult.gender = "ladies";
+      paths.push(ladiesResult);
+    }
+
+    if (paths.length > 0) {
+      paths.sort((a, b) => a.distance - b.distance);
+      paths.forEach((p, idx) => {
+        p.rank = idx + 1;
+      });
+      return { success: true, paths };
+    }
   }
 
   // Handle "nearest ..." query

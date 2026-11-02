@@ -98,6 +98,27 @@ function findByPartialLabel(query) {
  *           washroom_ladies, washroom, entrance, cafeteria, seating, corridor
  * Also maps friendly aliases: library → seating+LIBRARY, lounge → FACULTY LOUNGE, etc.
  */
+export function isGenericWashroomQuery(query) {
+  if (!query) return false;
+  const q = query.trim().toLowerCase();
+  if (/\b(ladies|lady|women|female|gents|gent|men|male)\b/i.test(q)) {
+    return false;
+  }
+  return /\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(q);
+}
+
+export function isLadiesWashroomQuery(query) {
+  if (!query) return false;
+  return /\b(ladies|lady|women|female)\b/i.test(query) &&
+    (/\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(query) || /^(ladies|women)$/i.test(query.trim()));
+}
+
+export function isGentsWashroomQuery(query) {
+  if (!query) return false;
+  return /\b(gents|gent|men|male)\b/i.test(query) &&
+    (/\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(query) || /^(gents|men)$/i.test(query.trim()));
+}
+
 function findByType(typeQuery) {
   const q = typeQuery.trim().toLowerCase();
 
@@ -122,12 +143,27 @@ function findByType(typeQuery) {
     washroom: 'washrooms',
     washrooms: 'washrooms',
     toilet: 'washrooms',
+    toilets: 'washrooms',
     restroom: 'washrooms',
+    restrooms: 'washrooms',
     bathroom: 'washrooms',
+    bathrooms: 'washrooms',
+    washroom_gents: 'washrooms_gents',
+    'washroom gents': 'washrooms_gents',
     'gents washroom': 'washrooms_gents',
+    'gents toilet': 'washrooms_gents',
     "men's washroom": 'washrooms_gents',
+    "men's toilet": 'washrooms_gents',
+    gents: 'washrooms_gents',
+    men: 'washrooms_gents',
+    washroom_ladies: 'washrooms_ladies',
+    'washroom ladies': 'washrooms_ladies',
     'ladies washroom': 'washrooms_ladies',
+    'ladies toilet': 'washrooms_ladies',
     "women's washroom": 'washrooms_ladies',
+    "women's toilet": 'washrooms_ladies',
+    ladies: 'washrooms_ladies',
+    women: 'washrooms_ladies',
     entrance: 'entrances',
     exit: 'entrances',
     door: 'entrances',
@@ -213,6 +249,13 @@ export function findCandidates(query) {
 
   const exact = findByExactLabel(q);
   if (exact) return [exact];
+
+  if (isLadiesWashroomQuery(q)) {
+    return (poiCategories.washrooms_ladies || []).map(nodeId => ({ nodeId, node: nodes[nodeId] }));
+  }
+  if (isGentsWashroomQuery(q)) {
+    return (poiCategories.washrooms_gents || []).map(nodeId => ({ nodeId, node: nodes[nodeId] }));
+  }
 
   const matches = searchNodes(q);
   if (matches.length > 0 && matches[0].score >= 700) {
@@ -546,6 +589,26 @@ export function getNodeDetails(nodeId) {
  * - Amenities: "library", "lift", "washroom", "cafe", "stairs"
  * - Node IDs: "node_1001"
  */
+const CATEGORY_MAP = {
+  washroom: ['washroom_gents', 'washroom_ladies'],
+  washrooms: ['washroom_gents', 'washroom_ladies'],
+  toilet: ['washroom_gents', 'washroom_ladies'],
+  toilets: ['washroom_gents', 'washroom_ladies'],
+  restroom: ['washroom_gents', 'washroom_ladies'],
+  restrooms: ['washroom_gents', 'washroom_ladies'],
+  bathroom: ['washroom_gents', 'washroom_ladies'],
+  bathrooms: ['washroom_gents', 'washroom_ladies'],
+  gents: ['washroom_gents'],
+  men: ['washroom_gents'],
+  ladies: ['washroom_ladies'],
+  women: ['washroom_ladies'],
+  lift: ['lift'],
+  elevator: ['lift'],
+  stairs: ['stairs'],
+  canteen: ['cafeteria'],
+  cafe: ['cafeteria'],
+};
+
 export function searchNodes(query) {
   if (!query || !query.trim()) return [];
   const rawQ = query.trim().toLowerCase();
@@ -565,11 +628,17 @@ export function searchNodes(query) {
       const roomNum = roomNumMatch ? roomNumMatch[0] : '';
       const rawType = (node.type || '').replace(/_/g, ' ').toLowerCase();
 
+      // Check semantic category alias matches
+      const isCategoryMatch = Object.entries(CATEGORY_MAP).some(
+        ([kw, types]) => (rawQ === kw || rawQ.includes(kw) || kw.includes(rawQ)) && types.includes(node.type)
+      );
+
       let score = 0;
 
       if (normLabel === normQ) score = 1000;
       else if (roomNum && roomNum === normQ) score = 950;
       else if (normLabel.startsWith(normQ)) score = 900;
+      else if (isCategoryMatch) score = 850;
       else if (normLabel.includes(normQ)) score = 800;
       else if (rawLabel.includes(rawQ)) score = 750;
       else if (rawType.includes(rawQ)) score = 600;

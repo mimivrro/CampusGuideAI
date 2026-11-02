@@ -51,6 +51,27 @@ function normalizeQuery(s) {
   return (s || '').toLowerCase().replace(/[\s\-_]+/g, '');
 }
 
+export function isGenericWashroomQuery(query) {
+  if (!query) return false;
+  const q = query.trim().toLowerCase();
+  if (/\b(ladies|lady|women|female|gents|gent|men|male)\b/i.test(q)) {
+    return false;
+  }
+  return /\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(q);
+}
+
+export function isLadiesWashroomQuery(query) {
+  if (!query) return false;
+  return /\b(ladies|lady|women|female)\b/i.test(query) &&
+    (/\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(query) || /^(ladies|women)$/i.test(query.trim()));
+}
+
+export function isGentsWashroomQuery(query) {
+  if (!query) return false;
+  return /\b(gents|gent|men|male)\b/i.test(query) &&
+    (/\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(query) || /^(gents|men)$/i.test(query.trim()));
+}
+
 export function resolveClientNode(query) {
   if (!query || !query.trim()) return null;
   const rawQ = query.trim();
@@ -117,6 +138,22 @@ export function resolveClientNode(query) {
   }
 
   // 6. Semantic POI categories
+  if (isLadiesWashroomQuery(lowerQ)) {
+    for (const [nodeId, node] of Object.entries(baseNodes)) {
+      if (node.type === 'washroom_ladies') {
+        return { nodeId, node, floor: 0 };
+      }
+    }
+  }
+
+  if (isGentsWashroomQuery(lowerQ)) {
+    for (const [nodeId, node] of Object.entries(baseNodes)) {
+      if (node.type === 'washroom_gents') {
+        return { nodeId, node, floor: 0 };
+      }
+    }
+  }
+
   const poiKeywords = {
     library: ['seating', 'library'],
     cafe: ['cafeteria'],
@@ -413,12 +450,38 @@ export function findClientKShortestPaths(startId, endId, k = 3) {
 // ---------------------------------------------------------------------------
 
 export function findClientNearest(typeQuery, startNodeId) {
-  const normType = typeQuery.trim().toLowerCase();
+  if (!typeQuery || !startNodeId) return null;
+  const cleanQ = typeQuery.trim().toLowerCase().replace(/_/g, ' ');
+  let targetTypes = [];
+
+  // Check specific gendered washroom queries
+  if (isLadiesWashroomQuery(cleanQ) || cleanQ === 'washroom ladies' || cleanQ === 'ladies washroom') {
+    targetTypes = ['washroom_ladies'];
+  } else if (isGentsWashroomQuery(cleanQ) || cleanQ === 'washroom gents' || cleanQ === 'gents washroom') {
+    targetTypes = ['washroom_gents'];
+  } else if (isGenericWashroomQuery(cleanQ)) {
+    targetTypes = ['washroom_gents', 'washroom_ladies'];
+  } else if (cleanQ.includes('lift') || cleanQ.includes('elevator')) {
+    targetTypes = ['lift'];
+  } else if (cleanQ.includes('stair')) {
+    targetTypes = ['stairs'];
+  } else if (cleanQ.includes('cafe') || cleanQ.includes('canteen') || cleanQ.includes('food')) {
+    targetTypes = ['cafeteria'];
+  } else if (cleanQ.includes('library')) {
+    targetTypes = ['seating'];
+  }
+
   let best = null;
 
   for (const [nodeId, node] of Object.entries(baseNodes)) {
     const rawType = (node.type || '').replace(/_/g, ' ').toLowerCase();
-    if (rawType.includes(normType) || (node.label && node.label.toLowerCase().includes(normType))) {
+    const nodeLabel = (node.label || '').toLowerCase();
+
+    const matchesTarget = targetTypes.length > 0
+      ? targetTypes.includes(node.type)
+      : (rawType.includes(cleanQ) || nodeLabel.includes(cleanQ));
+
+    if (matchesTarget) {
       const res = dijkstraWithExclusions(startNodeId, nodeId);
       if (res && (!best || res.distance < best.distance)) {
         best = { ...res, destId: nodeId, label: node.label };
@@ -428,6 +491,22 @@ export function findClientNearest(typeQuery, startNodeId) {
 
   if (!best) return null;
   return buildRouteResult(startNodeId, best.destId, best.path, best.distance, best.label);
+}
+
+export function findClientNearestWashrooms(startNodeId) {
+  const gents = findClientNearest('washroom_gents', startNodeId);
+  const ladies = findClientNearest('washroom_ladies', startNodeId);
+
+  if (gents) {
+    gents.destination.label = '🚹 Gents Washroom';
+    gents.gender = 'gents';
+  }
+  if (ladies) {
+    ladies.destination.label = '🚺 Ladies Washroom';
+    ladies.gender = 'ladies';
+  }
+
+  return { gents, ladies };
 }
 
 export function findClientRoute(startNodeId, destinationQuery) {
@@ -466,6 +545,26 @@ export function findClientRoute(startNodeId, destinationQuery) {
 export function findClientAlternatives(startNodeId, destinationQuery, k = 3, destinationLabel = null) {
   if (!baseNodes[startNodeId]) {
     return { success: false, error: `Unknown start node: ${startNodeId}` };
+  }
+
+  // Handle generic washroom query -> Return BOTH Gents and Ladies routes as alternative options
+  if (isGenericWashroomQuery(destinationQuery)) {
+    const { gents, ladies } = findClientNearestWashrooms(startNodeId);
+    const paths = [];
+    if (gents && ladies) {
+      if (gents.distance <= ladies.distance) {
+        paths.push({ ...gents, rank: 1, gender: 'gents' });
+        paths.push({ ...ladies, rank: 2, gender: 'ladies' });
+      } else {
+        paths.push({ ...ladies, rank: 1, gender: 'ladies' });
+        paths.push({ ...gents, rank: 2, gender: 'gents' });
+      }
+    } else if (gents) {
+      paths.push({ ...gents, rank: 1, gender: 'gents' });
+    } else if (ladies) {
+      paths.push({ ...ladies, rank: 1, gender: 'ladies' });
+    }
+    return { success: paths.length > 0, paths };
   }
 
   let destId = null;
