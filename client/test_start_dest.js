@@ -1,4 +1,12 @@
-import { resolveClientNode, findClientRoute, findClientNearest } from './src/services/clientNavigationEngine.js';
+import {
+  resolveClientNode,
+  findClientRoute,
+  findClientNearest,
+  findClientNearestWashrooms,
+  findClientAlternatives,
+  isGenericWashroomQuery,
+} from './src/services/clientNavigationEngine.js';
+import { searchLocalLocations } from './src/services/locationSearch.js';
 
 const DEFAULT_NODE_ID = "node_1005"; // A-Block Entrance
 
@@ -131,5 +139,67 @@ if (!swapped.success || swapped.route[0].label !== "A-008" || swapped.route[swap
   throw new Error("Case (e) failed!");
 }
 console.log("-> PASS: Case (e) swapped route works perfectly in reverse.\n");
+
+// Case f: Autocomplete search for "toilet", "washroom", "restroom" returns both Gents and Ladies washrooms
+console.log("TEST CASE (f): Autocomplete search for washrooms includes both Gents and Ladies");
+const searchToilet = searchLocalLocations("toilet");
+const searchWashroom = searchLocalLocations("washroom");
+const hasGentsToilet = searchToilet.some(r => r.type === 'washroom_gents');
+const hasLadiesToilet = searchToilet.some(r => r.type === 'washroom_ladies');
+const hasGentsWashroom = searchWashroom.some(r => r.type === 'washroom_gents');
+const hasLadiesWashroom = searchWashroom.some(r => r.type === 'washroom_ladies');
+
+console.log("Search 'toilet' results count:", searchToilet.length, { hasGentsToilet, hasLadiesToilet });
+console.log("Search 'washroom' results count:", searchWashroom.length, { hasGentsWashroom, hasLadiesWashroom });
+
+if (!hasGentsToilet || !hasLadiesToilet) {
+  throw new Error("Case (f) failed: search for 'toilet' must return both Gents and Ladies washrooms!");
+}
+if (!hasGentsWashroom || !hasLadiesWashroom) {
+  throw new Error("Case (f) failed: search for 'washroom' must return both Gents and Ladies washrooms!");
+}
+console.log("-> PASS: Case (f) autocomplete surfaces both Gents and Ladies washrooms.\n");
+
+// Case g: Generic washroom queries produce routes to BOTH Gents and Ladies washrooms
+console.log("TEST CASE (g): Generic washroom query produces routes to BOTH Gents and Ladies");
+const nearestWashrooms = findClientNearestWashrooms(DEFAULT_NODE_ID);
+console.log("Nearest washrooms from A-Block Entrance:", {
+  gents: nearestWashrooms.gents ? { label: nearestWashrooms.gents.destination.label, dist: nearestWashrooms.gents.distance } : null,
+  ladies: nearestWashrooms.ladies ? { label: nearestWashrooms.ladies.destination.label, dist: nearestWashrooms.ladies.distance } : null,
+});
+if (!nearestWashrooms.gents || !nearestWashrooms.ladies) {
+  throw new Error("Case (g) failed: both Gents and Ladies washrooms must be resolved!");
+}
+
+const altsToilet = findClientAlternatives(DEFAULT_NODE_ID, "toilet");
+const altsWashroom = findClientAlternatives(DEFAULT_NODE_ID, "nearest washroom");
+console.log("Alternatives for 'toilet':", altsToilet.paths?.map(p => `${p.destination.label} (${p.distance}u, ${p.gender})`));
+console.log("Alternatives for 'nearest washroom':", altsWashroom.paths?.map(p => `${p.destination.label} (${p.distance}u, ${p.gender})`));
+
+const hasBothInToiletAlts = altsToilet.paths?.some(p => p.gender === 'gents') && altsToilet.paths?.some(p => p.gender === 'ladies');
+const hasBothInWashroomAlts = altsWashroom.paths?.some(p => p.gender === 'gents') && altsWashroom.paths?.some(p => p.gender === 'ladies');
+
+if (!hasBothInToiletAlts || !hasBothInWashroomAlts) {
+  throw new Error("Case (g) failed: alternative paths for generic washroom must include both Gents and Ladies!");
+}
+console.log("-> PASS: Case (g) generic washroom routes compute both Gents and Ladies washroom alternatives.\n");
+
+// Case h: Specific "ladies washroom" navigates directly to washroom_ladies
+console.log("TEST CASE (h): Specific 'ladies washroom' navigates directly to Ladies Washroom");
+const ladiesRoute = simulateNavigate("ladies washroom", "A-Block Entrance");
+console.log("Ladies route destination:", ladiesRoute.destination);
+if (!ladiesRoute.success || ladiesRoute.destination.type !== "washroom_ladies") {
+  throw new Error("Case (h) failed: 'ladies washroom' did not route to washroom_ladies!");
+}
+console.log("-> PASS: Case (h) 'ladies washroom' navigates directly to Ladies Washroom.\n");
+
+// Case i: Specific "gents washroom" navigates directly to washroom_gents
+console.log("TEST CASE (i): Specific 'gents washroom' navigates directly to Gents Washroom");
+const gentsRoute = simulateNavigate("gents washroom", "A-Block Entrance");
+console.log("Gents route destination:", gentsRoute.destination);
+if (!gentsRoute.success || gentsRoute.destination.type !== "washroom_gents") {
+  throw new Error("Case (i) failed: 'gents washroom' did not route to washroom_gents!");
+}
+console.log("-> PASS: Case (i) 'gents washroom' navigates directly to Gents Washroom.\n");
 
 console.log("=== ALL TEST CASES PASSED SUCCESSFULLY ===");

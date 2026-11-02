@@ -4,7 +4,12 @@ import VoiceAssistant from "./components/VoiceAssistant";
 import ARNavigation from "./components/ARNavigation";
 import { getRoute, getNearest, getAlternatives, searchLocations } from "./services/navigationApi";
 import { searchLocalLocations } from "./services/locationSearch";
-import { resolveClientNode } from "./services/clientNavigationEngine";
+import {
+  resolveClientNode,
+  isGenericWashroomQuery,
+  findClientNearestWashrooms,
+  findClientNearest,
+} from "./services/clientNavigationEngine";
 import { API_BASE } from "./config";
 
 const DEFAULT_NODE_ID = "node_1005"; // A-Block Entrance
@@ -371,8 +376,13 @@ function App() {
     setRouteResult(path);
     const destLabel = path.destination?.label || path.destination?.type || "Destination";
     const timingInfo = formatTimeAndSteps(path.steps, path.timeSeconds);
+    const routePrefix = path.gender === "gents"
+      ? "Selected 🚹 Gents Washroom"
+      : path.gender === "ladies"
+      ? "Selected 🚺 Ladies Washroom"
+      : `Selected Route #${path.rank || 1}`;
     setResponse(
-      `Selected Route #${path.rank || 1}: **${destLabel}** (${timingInfo}, ${path.distance} units).` +
+      `${routePrefix}: **${destLabel}** (${timingInfo}, ${path.distance} units).` +
       (path.landmarks?.length ? ` Landmarks on path: ${path.landmarks.join(", ")}.` : "")
     );
     if (destLabel) {
@@ -478,8 +488,9 @@ function App() {
     }
 
     // 2. Pre-validate start != destination
+    const isWashroomGeneric = isGenericWashroomQuery(destQ);
     const nearestMatch = destQ.match(/^nearest\s+(.+)$/i);
-    if (!nearestMatch) {
+    if (!nearestMatch && !isWashroomGeneric) {
       const resolvedDest = resolveClientNode(destQ);
       if (resolvedDest && resolvedDest.nodeId === activeStartId) {
         const sameLocMsg = `Start and destination cannot be the same location (${resolvedDest.node?.label || activeStartLabelStr}).`;
@@ -496,6 +507,67 @@ function App() {
     setResponse("");
     setAlternativePaths([]);
     setCurrentNodeId(activeStartId);
+
+    // If generic washroom query -> compute routes to BOTH Gents and Ladies washrooms
+    if (isWashroomGeneric) {
+      try {
+        const [gentsResult, ladiesResult] = await Promise.all([
+          getNearest("washroom_gents", activeStartId).catch(() => findClientNearest("washroom_gents", activeStartId)),
+          getNearest("washroom_ladies", activeStartId).catch(() => findClientNearest("washroom_ladies", activeStartId)),
+        ]);
+
+        const paths = [];
+        if (gentsResult) {
+          gentsResult.destination.label = "🚹 Gents Washroom";
+          gentsResult.gender = "gents";
+          paths.push(gentsResult);
+        }
+        if (ladiesResult) {
+          ladiesResult.destination.label = "🚺 Ladies Washroom";
+          ladiesResult.gender = "ladies";
+          paths.push(ladiesResult);
+        }
+
+        if (paths.length === 0) {
+          throw new Error("No washrooms found nearby.");
+        }
+
+        // Sort closest first
+        paths.sort((a, b) => a.distance - b.distance);
+        paths.forEach((p, idx) => {
+          p.rank = idx + 1;
+        });
+
+        const activeRoute = paths[0];
+        setRouteResult(activeRoute);
+        setAlternativePaths(paths);
+
+        const gentsPath = paths.find((p) => p.gender === "gents");
+        const ladiesPath = paths.find((p) => p.gender === "ladies");
+        const gentsTimeStr = gentsPath ? formatTimeAndSteps(gentsPath.steps, gentsPath.timeSeconds) : null;
+        const ladiesTimeStr = ladiesPath ? formatTimeAndSteps(ladiesPath.steps, ladiesPath.timeSeconds) : null;
+
+        let responseMsg = `Found both washrooms near **${activeStartLabelStr}**:\n`;
+        if (gentsPath) {
+          responseMsg += `• **🚹 Gents Washroom**: ${gentsTimeStr} (${gentsPath.distance} units)\n`;
+        }
+        if (ladiesPath) {
+          responseMsg += `• **🚺 Ladies Washroom**: ${ladiesTimeStr} (${ladiesPath.distance} units)\n`;
+        }
+        responseMsg += `\nShowing route to closest (**${activeRoute.destination.label}**). Tap either route card below to switch!`;
+
+        setResponse(responseMsg);
+      } catch (err) {
+        const msg = err.message || "Failed to find washrooms.";
+        setError(msg);
+        setResponse(msg);
+        setRouteResult(null);
+        setAlternativePaths([]);
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
 
     try {
       let result;
@@ -907,7 +979,13 @@ function App() {
                   >
                     <div className="route-alt-card-top">
                       <div className="route-alt-rank-group">
-                        <span className="route-alt-rank">Route #{path.rank || idx + 1}</span>
+                        <span className="route-alt-rank">
+                          {path.gender === "gents"
+                            ? "🚹 Gents Washroom"
+                            : path.gender === "ladies"
+                            ? "🚺 Ladies Washroom"
+                            : `Route #${path.rank || idx + 1}`}
+                        </span>
                         {isShortest && (
                           <span className="route-alt-badge-shortest">Shortest</span>
                         )}

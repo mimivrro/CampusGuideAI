@@ -39,6 +39,26 @@ function normalize(s) {
  * - Categories: "washroom", "lift", "stairs", "classroom", "lab"
  * - Node IDs: "node_1001"
  */
+const CATEGORY_MAP = {
+  washroom: ['washroom_gents', 'washroom_ladies'],
+  washrooms: ['washroom_gents', 'washroom_ladies'],
+  toilet: ['washroom_gents', 'washroom_ladies'],
+  toilets: ['washroom_gents', 'washroom_ladies'],
+  restroom: ['washroom_gents', 'washroom_ladies'],
+  restrooms: ['washroom_gents', 'washroom_ladies'],
+  bathroom: ['washroom_gents', 'washroom_ladies'],
+  bathrooms: ['washroom_gents', 'washroom_ladies'],
+  gents: ['washroom_gents'],
+  men: ['washroom_gents'],
+  ladies: ['washroom_ladies'],
+  women: ['washroom_ladies'],
+  lift: ['lift'],
+  elevator: ['lift'],
+  stairs: ['stairs'],
+  canteen: ['cafeteria'],
+  cafe: ['cafeteria'],
+};
+
 export function searchLocalLocations(query, nodes = FALLBACK_GRAPH_DATA.nodes) {
   if (!query || !query.trim()) return [];
   const rawQ = query.trim().toLowerCase();
@@ -59,11 +79,17 @@ export function searchLocalLocations(query, nodes = FALLBACK_GRAPH_DATA.nodes) {
       const roomNum = roomNumMatch ? roomNumMatch[0] : '';
       const rawType = (node.type || '').replace(/_/g, ' ').toLowerCase();
 
+      // Check semantic category alias matches
+      const isCategoryMatch = Object.entries(CATEGORY_MAP).some(
+        ([kw, types]) => (rawQ === kw || rawQ.includes(kw) || kw.includes(rawQ)) && types.includes(node.type)
+      );
+
       let score = 0;
 
       if (normLabel === normQ) score = 1000;
       else if (roomNum && roomNum === normQ) score = 950;
       else if (normLabel.startsWith(normQ)) score = 900;
+      else if (isCategoryMatch) score = 850;
       else if (normLabel.includes(normQ)) score = 800;
       else if (rawLabel.includes(rawQ)) score = 750;
       else if (rawType.includes(rawQ)) score = 600;
