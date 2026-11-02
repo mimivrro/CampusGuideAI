@@ -9,6 +9,8 @@ import {
   isGenericWashroomQuery,
   findClientNearestWashrooms,
   findClientNearest,
+  isBare3DigitRoomQuery,
+  findClient3DigitBlockRoutes,
 } from "./services/clientNavigationEngine";
 import { API_BASE } from "./config";
 
@@ -380,6 +382,8 @@ function App() {
       ? "Selected 🚹 Gents Washroom"
       : path.gender === "ladies"
       ? "Selected 🚺 Ladies Washroom"
+      : path.block
+      ? `Selected ${path.destination?.label} (${path.block})`
       : `Selected Route #${path.rank || 1}`;
     setResponse(
       `${routePrefix}: **${destLabel}** (${timingInfo}, ${path.distance} units).` +
@@ -567,6 +571,33 @@ function App() {
         setIsLoading(false);
       }
       return;
+    }
+
+    // If bare 3-digit room query (e.g. "102") -> compute routes to all matching blocks (A, B, C)
+    const isBare3Digit = isBare3DigitRoomQuery(destQ);
+    if (isBare3Digit) {
+      const blockRoutes = findClient3DigitBlockRoutes(activeStartId, destQ);
+      if (blockRoutes.success && blockRoutes.paths.length > 1) {
+        setIsLoading(true);
+        setError(null);
+        setResponse("");
+        setCurrentNodeId(activeStartId);
+
+        const primaryRoute = blockRoutes.paths[0];
+        setRouteResult(primaryRoute);
+        setAlternativePaths(blockRoutes.paths);
+
+        let responseMsg = `Found room **${destQ}** in multiple campus blocks near **${activeStartLabelStr}**:\n`;
+        blockRoutes.paths.forEach((p) => {
+          const timingInfo = formatTimeAndSteps(p.steps, p.timeSeconds);
+          responseMsg += `• **${p.destination.label}** (${p.block}): ${timingInfo} (${p.distance} units)\n`;
+        });
+        responseMsg += `\nShowing route to closest (**${primaryRoute.destination.label}**). Tap a block card below to switch!`;
+
+        setResponse(responseMsg);
+        setIsLoading(false);
+        return;
+      }
     }
 
     try {
@@ -984,6 +1015,8 @@ function App() {
                             ? "🚹 Gents Washroom"
                             : path.gender === "ladies"
                             ? "🚺 Ladies Washroom"
+                            : path.block
+                            ? `${path.destination?.label} (${path.block})`
                             : `Route #${path.rank || idx + 1}`}
                         </span>
                         {isShortest && (

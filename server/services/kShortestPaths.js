@@ -6,7 +6,7 @@
  * Returns distinct, loopless paths sorted shortest first.
  */
 
-import { graph, buildRouteResult, resolveNode, findNearest, isGenericWashroomQuery } from './navigationService.js';
+import { graph, buildRouteResult, resolveNode, findNearest, isGenericWashroomQuery, getNodesByFloor } from './navigationService.js';
 import { nodes } from '../data/buildingData.js';
 
 // ---------------------------------------------------------------------------
@@ -192,6 +192,56 @@ export function calculateAlternativeRoutes(startNodeId, destinationQuery, k = 3,
         p.rank = idx + 1;
       });
       return { success: true, paths };
+    }
+  }
+
+  // Handle bare 3-digit room query -> Return matching rooms across all blocks (A, B, C)
+  const room3Match = destinationQuery.trim().match(/^([0-3])(\d{2})$/);
+  if (room3Match) {
+    const floor = parseInt(room3Match[1], 10);
+    const roomNum = parseInt(room3Match[2], 10);
+    const targetRoomStr = roomNum.toString().padStart(3, '0');
+    const blocks = ['A', 'B', 'C'];
+    const candidates = [];
+    const floorNodes = getNodesByFloor(floor);
+
+    for (const block of blocks) {
+      const baseLabel = `${block}-${targetRoomStr}`;
+      for (const [nodeId, node] of Object.entries(nodes)) {
+        if (node.label && node.label.toUpperCase() === baseLabel) {
+          const floorNode = floorNodes[nodeId] || { ...node, label: baseLabel, floor };
+          candidates.push({
+            nodeId,
+            block: `Block ${block}`,
+            blockLetter: block,
+            label: floorNode.label,
+          });
+          break;
+        }
+      }
+    }
+
+    if (candidates.length > 0) {
+      const paths = [];
+      for (const cand of candidates) {
+        const raw = dijkstraWithExclusions(startNodeId, cand.nodeId, new Set(), new Set());
+        if (raw) {
+          const baseResult = buildRouteResult(startNodeId, cand.nodeId, raw.path, raw.distance, cand.label);
+          paths.push({
+            ...baseResult,
+            block: cand.block,
+            blockLetter: cand.blockLetter,
+          });
+        }
+      }
+
+      if (paths.length > 0) {
+        paths.sort((a, b) => a.distance - b.distance || a.blockLetter.localeCompare(b.blockLetter));
+        paths.forEach((p, idx) => {
+          p.rank = idx + 1;
+        });
+        return { success: true, paths };
+      }
     }
   }
 
