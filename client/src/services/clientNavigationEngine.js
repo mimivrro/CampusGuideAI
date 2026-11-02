@@ -72,6 +72,81 @@ export function isGentsWashroomQuery(query) {
     (/\b(washroom|washrooms|toilet|toilets|restroom|restrooms|bathroom|bathrooms)\b/i.test(query) || /^(gents|men)$/i.test(query.trim()));
 }
 
+export function isBare3DigitRoomQuery(query) {
+  if (!query) return false;
+  const q = query.trim();
+  return /^[0-3]\d{2}$/.test(q);
+}
+
+export function findMatchingRoomsAcrossBlocks(query) {
+  if (!query) return [];
+  const q = query.trim();
+  const room3Match = q.match(/^([0-3])(\d{2})$/);
+  if (!room3Match) return [];
+
+  const floor = parseInt(room3Match[1], 10);
+  const roomNum = parseInt(room3Match[2], 10);
+  const targetRoomStr = roomNum.toString().padStart(3, '0');
+
+  const blocks = ['A', 'B', 'C'];
+  const candidates = [];
+  const floorNodes = getNodesByFloor(baseNodes, floor);
+
+  for (const block of blocks) {
+    const baseLabel = `${block}-${targetRoomStr}`;
+    for (const [nodeId, node] of Object.entries(baseNodes)) {
+      if (node.label && node.label.toUpperCase() === baseLabel) {
+        const floorNode = floorNodes[nodeId] || { ...node, label: baseLabel, floor };
+        candidates.push({
+          nodeId,
+          block: `Block ${block}`,
+          blockLetter: block,
+          label: floorNode.label,
+          floor,
+          node: floorNode,
+        });
+        break;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+export function findClient3DigitBlockRoutes(startNodeId, query) {
+  const candidates = findMatchingRoomsAcrossBlocks(query);
+  if (candidates.length === 0) return { success: false, paths: [] };
+
+  const paths = [];
+  for (const cand of candidates) {
+    let res;
+    if (cand.nodeId === startNodeId) {
+      res = { path: [startNodeId], distance: 0 };
+    } else {
+      res = dijkstraWithExclusions(startNodeId, cand.nodeId);
+    }
+
+    if (res) {
+      const baseResult = buildRouteResult(startNodeId, cand.nodeId, res.path, res.distance, cand.label);
+      paths.push({
+        ...baseResult,
+        block: cand.block,
+        blockLetter: cand.blockLetter,
+      });
+    }
+  }
+
+  if (paths.length === 0) return { success: false, paths: [] };
+
+  // Sort shortest distance first, prioritizing Block A if tied
+  paths.sort((a, b) => a.distance - b.distance || a.blockLetter.localeCompare(b.blockLetter));
+  paths.forEach((p, idx) => {
+    p.rank = idx + 1;
+  });
+
+  return { success: true, paths };
+}
+
 export function resolveClientNode(query) {
   if (!query || !query.trim()) return null;
   const rawQ = query.trim();
@@ -565,6 +640,14 @@ export function findClientAlternatives(startNodeId, destinationQuery, k = 3, des
       paths.push({ ...ladies, rank: 1, gender: 'ladies' });
     }
     return { success: paths.length > 0, paths };
+  }
+
+  // Handle bare 3-digit room query -> Return matching rooms across all blocks (A, B, C)
+  if (isBare3DigitRoomQuery(destinationQuery)) {
+    const multiBlock = findClient3DigitBlockRoutes(startNodeId, destinationQuery);
+    if (multiBlock.success && multiBlock.paths.length > 0) {
+      return multiBlock;
+    }
   }
 
   let destId = null;
