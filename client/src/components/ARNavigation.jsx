@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import {
+  calculateBearing,
+  calculateTurnAngle,
   speakInstruction,
   getActionIconSvg,
   isTabletDevice,
@@ -8,7 +10,9 @@ import {
   smoothAngle,
   getScreenOrientationAngle,
   filterLinearAcceleration,
+  SCALE_METERS,
 } from '../services/arUtils';
+import { getRoute } from '../services/navigationApi';
 
 /**
  * Creates the exact dual-tone teardrop location pin from the reference image.
@@ -30,106 +34,124 @@ function createTeardropPin({
   emissiveLeft,
   emissiveRight,
 }) {
-  const group = new THREE.Group();
-  group.frustumCulled = false;
+  const pinGroup = new THREE.Group();
+  pinGroup.frustumCulled = false;
 
   const R = width / 2;
-  const Yc = height - R;
-  const r = holeRadius;
-  const theta = Math.asin(Math.min(0.99, R / Yc));
-  const XtLeft = -R * Math.cos(theta);
-  const YtLeft = Yc - R * Math.sin(theta);
+  const H = height;
+  const needleY = 0.09;
+  const headCenterY = needleY + (H - R);
 
-  // 1. Left Half Shape
-  const shapeLeft = new THREE.Shape();
-  shapeLeft.moveTo(0, 0); // Tip
-  shapeLeft.lineTo(XtLeft, YtLeft); // Left straight edge
-  // Outer arc around top-left to top center (0, height)
-  shapeLeft.absarc(0, Yc, R, -Math.PI + theta, Math.PI / 2, true);
-  // Center line down to top of inner circular hole
-  shapeLeft.lineTo(0, Yc + r);
-  // Inner arc around left side of hole to bottom of hole (0, Yc - r)
-  shapeLeft.absarc(0, Yc, r, Math.PI / 2, -Math.PI / 2, false);
-  // Center line down to tip (0, 0)
-  shapeLeft.lineTo(0, 0);
+  // 1. Left Half Shape (Darker side) with center hole
+  const leftShape = new THREE.Shape();
+  leftShape.moveTo(0, needleY);
+  leftShape.lineTo(-R * 0.96, headCenterY - R * 0.28);
+  leftShape.absarc(0, headCenterY, R, Math.PI, Math.PI / 2, false);
+  leftShape.lineTo(0, headCenterY + R);
+  leftShape.lineTo(0, needleY);
 
-  // 2. Right Half Shape
-  const shapeRight = new THREE.Shape();
-  shapeRight.moveTo(0, 0); // Tip
-  // Center line up to bottom of inner circular hole
-  shapeRight.lineTo(0, Yc - r);
-  // Inner arc around right side of hole to top of hole (0, Yc + r)
-  shapeRight.absarc(0, Yc, r, -Math.PI / 2, Math.PI / 2, false);
-  // Center line up to top center (0, height)
-  shapeRight.lineTo(0, height);
-  // Outer arc around top-right to right tangent point (XtRight, YtRight)
-  shapeRight.absarc(0, Yc, R, Math.PI / 2, -theta, true);
-  // Right straight edge down to tip (0, 0)
-  shapeRight.lineTo(0, 0);
+  const leftHole = new THREE.Path();
+  leftHole.absarc(0, headCenterY, holeRadius, Math.PI / 2, (3 * Math.PI) / 2, false);
+  leftHole.lineTo(0, headCenterY + holeRadius);
+  leftShape.holes.push(leftHole);
+
+  // 2. Right Half Shape (Lighter side) with center hole
+  const rightShape = new THREE.Shape();
+  rightShape.moveTo(0, needleY);
+  rightShape.lineTo(0, headCenterY + R);
+  rightShape.absarc(0, headCenterY, R, Math.PI / 2, 0, true);
+  rightShape.lineTo(R * 0.96, headCenterY - R * 0.28);
+  rightShape.lineTo(0, needleY);
+
+  const rightHole = new THREE.Path();
+  rightHole.absarc(0, headCenterY, holeRadius, Math.PI / 2, -Math.PI / 2, true);
+  rightHole.lineTo(0, headCenterY + holeRadius);
+  rightShape.holes.push(rightHole);
 
   const extrudeSettings = {
+    steps: 1,
     depth: depth,
     bevelEnabled: true,
-    bevelSegments: 2,
-    steps: 1,
-    bevelSize: 0.004,
-    bevelThickness: 0.004,
+    bevelThickness: 0.012,
+    bevelSize: 0.012,
+    bevelOffset: 0,
+    bevelSegments: 4,
+    curveSegments: 36,
   };
 
-  const geoLeft = new THREE.ExtrudeGeometry(shapeLeft, extrudeSettings);
-  geoLeft.translate(0, 0, -depth / 2);
-  const matLeft = new THREE.MeshStandardMaterial({
+  const leftGeo = new THREE.ExtrudeGeometry(leftShape, extrudeSettings);
+  leftGeo.center();
+  const leftMat = new THREE.MeshStandardMaterial({
     color: leftColor,
     emissive: emissiveLeft,
     emissiveIntensity: 0.45,
-    roughness: 0.25,
-    metalness: 0.2,
+    metalness: 0.15,
+    roughness: 0.35,
+    side: THREE.DoubleSide,
   });
-  const meshLeft = new THREE.Mesh(geoLeft, matLeft);
-  meshLeft.frustumCulled = false;
+  const leftMesh = new THREE.Mesh(leftGeo, leftMat);
+  leftMesh.frustumCulled = false;
 
-  const geoRight = new THREE.ExtrudeGeometry(shapeRight, extrudeSettings);
-  geoRight.translate(0, 0, -depth / 2);
-  const matRight = new THREE.MeshStandardMaterial({
+  const rightGeo = new THREE.ExtrudeGeometry(rightShape, extrudeSettings);
+  rightGeo.center();
+  const rightMat = new THREE.MeshStandardMaterial({
     color: rightColor,
     emissive: emissiveRight,
     emissiveIntensity: 0.55,
-    roughness: 0.25,
-    metalness: 0.2,
+    metalness: 0.15,
+    roughness: 0.3,
+    side: THREE.DoubleSide,
   });
-  const meshRight = new THREE.Mesh(geoRight, matRight);
-  meshRight.frustumCulled = false;
+  const rightMesh = new THREE.Mesh(rightGeo, rightMat);
+  rightMesh.frustumCulled = false;
 
-  // Container for the 3D pin body (rests tip at y = 0.09, just above floor ribbon)
   const pinBody = new THREE.Group();
-  pinBody.add(meshLeft);
-  pinBody.add(meshRight);
-  pinBody.position.y = 0.09;
   pinBody.frustumCulled = false;
-  group.add(pinBody);
+  pinBody.add(leftMesh);
+  pinBody.add(rightMesh);
 
-  // 3. Ground Drop Shadow (matching the image)
-  const shadowGeo = new THREE.CircleGeometry(shadowX, 32);
+  const meshOffset = headCenterY - (H / 2) + needleY;
+  pinBody.position.y = headCenterY;
+  pinGroup.add(pinBody);
+
+  // 3. Ground Drop Shadow (Soft dark elliptical disk on floor beneath the needle tip)
+  const shadowGeo = new THREE.RingGeometry(0, shadowX, 32);
   shadowGeo.rotateX(-Math.PI / 2);
   shadowGeo.scale(1, 1, shadowZ / shadowX);
+
+  const shadowCanvas = document.createElement('canvas');
+  shadowCanvas.width = 128;
+  shadowCanvas.height = 128;
+  const ctx = shadowCanvas.getContext('2d');
+  if (ctx) {
+    const grad = ctx.createRadialGradient(64, 64, 8, 64, 64, 62);
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0.7)');
+    grad.addColorStop(0.5, 'rgba(0, 0, 0, 0.35)');
+    grad.addColorStop(0.85, 'rgba(0, 0, 0, 0.1)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 128);
+  }
+  const shadowTex = new THREE.CanvasTexture(shadowCanvas);
   const shadowMat = new THREE.MeshBasicMaterial({
-    color: 0x000000,
+    map: shadowTex,
     transparent: true,
-    opacity: 0.35,
+    opacity: 0.75,
     depthWrite: false,
+    side: THREE.DoubleSide,
   });
   const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
-  shadowMesh.position.y = 0.02; // Flush with floor
+  shadowMesh.position.y = 0.02; // Just above ground plane to prevent z-fighting
   shadowMesh.frustumCulled = false;
-  group.add(shadowMesh);
+  pinGroup.add(shadowMesh);
 
   return {
-    group,
+    group: pinGroup,
     pinBody,
     shadowMesh,
-    baseY: 0.09,
+    baseY: headCenterY,
     shadowBaseScaleX: 1,
-    shadowBaseScaleZ: shadowZ / shadowX,
+    shadowBaseScaleZ: 1,
   };
 }
 
@@ -137,213 +159,243 @@ function createTeardropPin({
  * ARNavigation.jsx
  *
  * Immersive WebAR / ARCore 3D Interior Navigation Viewport.
- * - Dynamic Phone vs. Tablet sizing: Pointers are sized and elevated specifically for
- *   each device form factor, with hollow reticles to keep the glowing green floor pathway 100% visible.
- * - NO PRECODED TIMERS: 3D position and step progression only change when the user physically walks
- *   (via linear accelerometer pedometer step detection) or manually taps "Step Forward".
- * - Renders a continuous 3D floor pathway ribbon connecting Start (Holo-Beacon) to Destination (Waypoint).
- * - Real-time Gyroscope compass orientation with screen angle orientation compensation.
- * - Full WebXR Google ARCore support with Three.js XR camera binding.
- * - Dynamic hands-free turn guidance HUD that reacts to physical walking movement.
+ * - Automatic device detection (Phone vs. Tablet/iPad) without manual button.
+ * - Dual-tone teardrop pin markers matching the reference design.
+ * - Blue pointer: Initial moving guide pointer that advances along the path as the user walks.
+ * - Red pointer: Fixed destination marker.
+ * - Apt sizing so floor pathway ribbon remains 100% visible and unobstructed.
+ * - Physical motion tracking (DeviceMotion pedometer) + manual step forward & pace simulation.
  */
 function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const videoRef = useRef(null);
 
-  // AR State
+  // Active route state (uses prop or fallback calculation)
+  const [activeRouteResult, setActiveRouteResult] = useState(routeResult || null);
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  // Synchronize prop updates
+  useEffect(() => {
+    if (routeResult) {
+      setActiveRouteResult(routeResult);
+    }
+  }, [routeResult]);
+
+  // If no routeResult provided on mount, automatically calculate route to Central Library
+  useEffect(() => {
+    if (!activeRouteResult) {
+      const startId = (typeof startNode === 'string' && startNode) ? startNode : 'node_1005';
+      setRouteLoading(true);
+      getRoute(startId, 'Central Library')
+        .then((res) => {
+          setActiveRouteResult(res);
+        })
+        .catch(() => {})
+        .finally(() => {
+          setRouteLoading(false);
+        });
+    }
+  }, [startNode, activeRouteResult]);
+
+  // Automatic Device Detection (Phone vs Tablet) without any manual toggle button
+  const [deviceMode, setDeviceMode] = useState(() => (isTabletDevice() ? 'tablet' : 'phone'));
+
+  useEffect(() => {
+    function checkLayout() {
+      const tablet = isTabletDevice();
+      setDeviceMode(tablet ? 'tablet' : 'phone');
+    }
+
+    checkLayout();
+    window.addEventListener('resize', checkLayout);
+    window.addEventListener('orientationchange', checkLayout);
+
+    return () => {
+      window.removeEventListener('resize', checkLayout);
+      window.removeEventListener('orientationchange', checkLayout);
+    };
+  }, []);
+
+  // AR & Camera State
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [heading, setHeading] = useState(0); // Compass orientation (0 - 360 deg)
   const [autoRotate, setAutoRotate] = useState(true);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [webXRSupported, setWebXRSupported] = useState(false);
   const [xrSessionActive, setXrSessionActive] = useState(false);
   const [showAnchorModal, setShowAnchorModal] = useState(false);
-
-  // Automatic Device Form Factor Detection (Phone vs iPad/Tablet) - NO BUTTON
-  const [deviceMode, setDeviceMode] = useState(() => (isTabletDevice() ? 'tablet' : 'phone'));
-
-  useEffect(() => {
-    function handleDeviceCheck() {
-      const tablet = isTabletDevice();
-      setDeviceMode(tablet ? 'tablet' : 'phone');
-    }
-    window.addEventListener('resize', handleDeviceCheck);
-    window.addEventListener('orientationchange', handleDeviceCheck);
-    return () => {
-      window.removeEventListener('resize', handleDeviceCheck);
-      window.removeEventListener('orientationchange', handleDeviceCheck);
-    };
-  }, []);
-
-  // Physical Motion / Pedometer Step State (NO TIMERS!)
-  const [walkProgress, setWalkProgress] = useState(0); // Progress index along route (0.0 to route.length - 1)
-  const [stepCount, setStepCount] = useState(0);
-  const [motionSensorActive, setMotionSensorActive] = useState(false);
-  const [pedometerSensitivity, setPedometerSensitivity] = useState('normal'); // 'high' | 'normal' | 'low'
-  const [lastStepFeedback, setLastStepFeedback] = useState(false);
-  const [isStepsExpanded, setIsStepsExpanded] = useState(false); // Collapsible drawer
   const [dismissSimulatedNotice, setDismissSimulatedNotice] = useState(false);
 
-  const route = useMemo(() => routeResult?.route ?? [], [routeResult?.route]);
-  const turnInstructions = useMemo(
-    () => routeResult?.turnInstructions ?? [],
-    [routeResult?.turnInstructions]
-  );
-  const destination = routeResult?.destination ?? null;
+  // Physical Motion / Pedometer Step State (NO PRECODED TIMERS)
+  const [walkProgress, setWalkProgress] = useState(0); // Progress index along route (0.0 to route.length - 1)
+  const [stepCount, setStepCount] = useState(0);
+  const [autoWalkPace, setAutoWalkPace] = useState(false); // Smooth preview walk simulation
+  const [motionSensorActive, setMotionSensorActive] = useState(false);
+  const [lastStepFeedback, setLastStepFeedback] = useState(false);
+  const [pedometerSensitivity, setPedometerSensitivity] = useState('normal'); // 'normal' | 'high' | 'low'
+  const [isStepsExpanded, setIsStepsExpanded] = useState(false); // Collapsible drawer: false = kept down, true = kept up
+
+  const route = activeRouteResult?.route ?? [];
+  const turnInstructions = activeRouteResult?.turnInstructions ?? [];
+  const destination = activeRouteResult?.destination ?? null;
   const startLocation = route[0] ?? null;
 
-  // Derive active instruction step from physical walkProgress
+  // Active turn instruction based on physical walkProgress
   const currentStepIndex = Math.min(
     Math.floor(walkProgress),
     Math.max(0, turnInstructions.length - 1)
   );
-  const currentStep = turnInstructions[currentStepIndex] || turnInstructions[0];
+  const currentStep = turnInstructions[currentStepIndex] || null;
 
-  // Camera devices
-  const [videoDevices, setVideoDevices] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState('');
-
-  // Three.js scene refs
+  // Three.js Scene References
   const sceneRef = useRef(null);
   const cameraThreeRef = useRef(null);
   const rendererRef = useRef(null);
   const arrowMeshRef = useRef(null);
   const blueDotRef = useRef(null);
   const redDotRef = useRef(null);
-  const startPartsRef = useRef(null);
-  const destPartsRef = useRef(null);
   const pathLineRef = useRef(null);
   const animFrameId = useRef(null);
-  const gravityRef = useRef({ x: 0, y: 9.8, z: 0 });
+  const startPartsRef = useRef(null);
+  const destPartsRef = useRef(null);
 
   // Check WebXR AR support
   useEffect(() => {
-    if ('xr' in navigator) {
-      navigator.xr
-        .isSessionSupported('immersive-ar')
+    if (typeof navigator !== 'undefined' && navigator.xr) {
+      navigator.xr.isSessionSupported('immersive-ar')
         .then((supported) => setWebXRSupported(supported))
         .catch(() => setWebXRSupported(false));
     }
   }, []);
 
-  // Enumerate video devices
-  const loadVideoDevices = useCallback(async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cams = devices.filter((d) => d.kind === 'videoinput');
-      setVideoDevices(cams);
-    } catch (e) {
-      console.warn('Could not enumerate camera devices:', e);
+  // Enumerate Video Devices
+  useEffect(() => {
+    async function getCameras() {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        setVideoDevices(videoInputs);
+        const backCam = videoInputs.find(
+          (d) => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment')
+        );
+        if (backCam) {
+          setSelectedDeviceId(backCam.deviceId);
+        } else if (videoInputs.length > 0) {
+          setSelectedDeviceId(videoInputs[0].deviceId);
+        }
+      } catch (err) {
+        console.warn('Error enumerating cameras:', err);
+      }
     }
+    getCameras();
   }, []);
 
-  // Request Camera Stream
-  const startCamera = useCallback(
-    async (deviceId = null) => {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Camera API not supported in this browser context.');
-        setCameraActive(false);
-        return;
+  // Initialize Real Camera Video Stream
+  const startCamera = useCallback(async (deviceId) => {
+    try {
+      setCameraError(null);
+      if (videoRef.current?.srcObject) {
+        const tracks = videoRef.current.srcObject.getTracks();
+        tracks.forEach((t) => t.stop());
       }
 
-      let stream = null;
-      try {
-        if (deviceId) {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: deviceId } },
-          });
-        } else {
-          try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: { facingMode: { ideal: 'environment' } },
-            });
-          } catch {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          }
-        }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera API (getUserMedia) not available in this browser context.');
+      }
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          try {
-            await videoRef.current.play();
-          } catch (pErr) {
-            console.warn('Video play interrupted:', pErr);
-          }
-        }
+      const constraints = {
+        video: deviceId
+          ? { deviceId: { exact: deviceId } }
+          : {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+        audio: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
         setCameraActive(true);
-        setCameraError(null);
-        await loadVideoDevices();
-      } catch (err) {
-        console.warn('Camera access failed:', err);
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setCameraError(
-            'Camera permission blocked. Click the lock icon in the address bar -> Allow Camera -> Refresh.'
-          );
-        } else if (err.name === 'NotFoundError') {
-          setCameraError('No camera device detected on this system.');
-        } else {
-          setCameraError(`Camera unavailable (${err.name || 'Error'}).`);
-        }
-        setCameraActive(false);
       }
-    },
-    [loadVideoDevices]
-  );
+    } catch (err) {
+      console.warn('Camera initialization failed:', err);
+      setCameraError(err.message || 'Camera permission denied or camera unavailable');
+      setCameraActive(false);
+    }
+  }, []);
 
   useEffect(() => {
     startCamera(selectedDeviceId);
   }, [selectedDeviceId, startCamera]);
 
-  // Gyroscope / Compass orientation with screen angle compensation
+  // Orientation Sensor (Gyroscope Compass)
   useEffect(() => {
+    let screenOrientation = getScreenOrientationAngle();
+
+    function onScreenOrientationChange() {
+      screenOrientation = getScreenOrientationAngle();
+    }
+    window.addEventListener('orientationchange', onScreenOrientationChange);
+
     function handleOrientation(e) {
       if (!autoRotate) return;
-      let alpha = e.alpha;
-      if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
-        // iOS Safari gives compass heading relative to true north
-        alpha = e.webkitCompassHeading;
-      }
-      if (alpha !== null && alpha !== undefined) {
-        // Adjust for device screen orientation (landscape tablets vs portrait phones)
-        const screenAngle = getScreenOrientationAngle();
-        const adjustedHeading = (alpha + screenAngle + 360) % 360;
+      let rawHeading = null;
 
-        setHeading((prev) => smoothAngle(prev, adjustedHeading, 0.18));
+      if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+        rawHeading = e.webkitCompassHeading;
+      } else if (e.alpha !== null && e.alpha !== undefined) {
+        rawHeading = (360 - e.alpha + screenOrientation) % 360;
+      }
+
+      if (rawHeading !== null) {
+        setHeading((prev) => smoothAngle(prev, rawHeading, 0.18));
       }
     }
 
-    if ('ondeviceorientationabsolute' in window) {
-      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-    } else if (window.DeviceOrientationEvent) {
+    if (window.DeviceOrientationEvent) {
       window.addEventListener('deviceorientation', handleOrientation, true);
     }
 
     return () => {
-      if ('ondeviceorientationabsolute' in window) {
-        window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
-      }
+      window.removeEventListener('orientationchange', onScreenOrientationChange);
       if (window.DeviceOrientationEvent) {
         window.removeEventListener('deviceorientation', handleOrientation, true);
       }
     };
   }, [autoRotate]);
 
-  // Function to take 1 physical step forward along route
-  const advanceStep = useCallback(
-    (stepMagnitude = null) => {
-      if (!route || route.length < 2) return;
-      const pointerCfg = getPointerConfig(deviceMode === 'tablet');
-      const mag = stepMagnitude ?? pointerCfg.strideAdvance;
-      setStepCount((c) => c + 1);
-      setWalkProgress((prev) => Math.min(route.length - 1, prev + mag));
-      setLastStepFeedback(true);
-      setTimeout(() => setLastStepFeedback(false), 300);
-    },
-    [route, deviceMode]
-  );
+  // Advance physical step forward along route with visual surge & haptic feedback
+  const advanceStep = useCallback((stepMagnitude = 0.14) => {
+    const maxProg = Math.max(1, (route.length > 0 ? route.length - 1 : 10));
+    setStepCount((c) => c + 1);
+    setWalkProgress((prev) => Math.min(maxProg, prev + stepMagnitude));
+
+    setLastStepFeedback(true);
+    setTimeout(() => setLastStepFeedback(false), 250);
+
+    // Haptic vibration on mobile
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate(25); } catch {}
+    }
+  }, [route]);
+
+  // Walking Pace Simulation (Smooth preview walk at natural walking pace)
+  useEffect(() => {
+    if (!autoWalkPace) return;
+    const interval = setInterval(() => {
+      advanceStep(0.05);
+    }, 220);
+    return () => clearInterval(interval);
+  }, [autoWalkPace, advanceStep]);
 
   // Request Motion Sensors (iOS 13+ & Android permission prompt)
   const enableMotionSensor = useCallback(async () => {
@@ -363,59 +415,53 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     }
   }, []);
 
-  // REAL Physical Step Detection (Pedometer via DeviceMotion API — NO TIMERS)
+  // REAL Physical Step Detection (Pedometer via DeviceMotion API — NO PRECODED TIMERS)
   useEffect(() => {
     let lastMag = 0;
     let lastStepTime = 0;
 
     function handleMotion(e) {
       if (!route || route.length < 2) return;
-      const rawAcc = e.accelerationIncludingGravity || e.acceleration;
-      if (!rawAcc) return;
+      const acc = e.accelerationIncludingGravity || e.acceleration;
+      if (!acc) return;
 
-      const pointerCfg = getPointerConfig(deviceMode === 'tablet');
+      const [filteredX, filteredY, filteredZ] = filterLinearAcceleration(
+        acc.x || 0,
+        acc.y || 0,
+        acc.z || 0
+      );
+      const mag = Math.hypot(filteredX, filteredY, filteredZ);
 
-      // Filter linear acceleration by extracting gravity
-      const linear = e.acceleration || filterLinearAcceleration(rawAcc, gravityRef.current, 0.82);
-      const mag =
-        linear.magnitude !== undefined
-          ? linear.magnitude
-          : Math.hypot(linear.x || 0, linear.y || 0, linear.z || 0);
+      const threshold = pedometerSensitivity === 'high' ? 1.6 : pedometerSensitivity === 'low' ? 3.0 : 2.2;
+      const now = performance.now();
 
-      const delta = Math.abs(mag - lastMag);
-      lastMag = mag;
-
-      const now = Date.now();
-      let threshold = pointerCfg.stepDeltaThreshold;
-      if (pedometerSensitivity === 'high') threshold *= 0.65;
-      if (pedometerSensitivity === 'low') threshold *= 1.45;
-
-      const minInterval = deviceMode === 'tablet' ? 360 : 320;
-      if (delta > threshold && now - lastStepTime > minInterval) {
+      // Peak detection with refractory debounce
+      if (lastMag > threshold && mag < lastMag && now - lastStepTime > 360) {
         lastStepTime = now;
-        setMotionSensorActive(true);
-        advanceStep(pointerCfg.strideAdvance);
+        advanceStep(0.14);
       }
+      lastMag = mag;
     }
 
     if (window.DeviceMotionEvent) {
-      window.addEventListener('devicemotion', handleMotion);
+      window.addEventListener('devicemotion', handleMotion, true);
+      setMotionSensorActive(true);
     }
+
     return () => {
       if (window.DeviceMotionEvent) {
-        window.removeEventListener('devicemotion', handleMotion);
+        window.removeEventListener('devicemotion', handleMotion, true);
       }
     };
-  }, [route, advanceStep, deviceMode, pedometerSensitivity]);
+  }, [route, pedometerSensitivity, advanceStep]);
 
-  // Voice Instruction triggers ONLY when physical step index advances
+  // Voice Guidance Trigger upon reaching turn step
   useEffect(() => {
-    if (voiceEnabled && currentStep) {
-      speakInstruction(currentStep.text);
-    }
-  }, [currentStepIndex, voiceEnabled, currentStep]);
+    if (!voiceEnabled || !currentStep) return;
+    speakInstruction(currentStep.text);
+  }, [currentStepIndex, voiceEnabled]);
 
-  // Rebuild Pointers helper (disposing old geometries to prevent GPU memory leaks)
+  // Build & Rebuild 3D Pointers according to detected device layout
   const rebuildPointers = useCallback((scene, isTablet) => {
     if (!scene) return;
 
@@ -445,7 +491,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
     const cfg = getPointerConfig(isTablet);
 
-    // 1. Initial / Walking Blue Pointer (matches bottom pin in user reference image)
+    // 1. Initial / Walking Blue Pointer (matches bottom pin in reference image)
     const blueData = createTeardropPin({
       height: cfg.pinHeight,
       width: cfg.pinWidth,
@@ -462,7 +508,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     blueDotRef.current = blueData.group;
     startPartsRef.current = blueData;
 
-    // 2. Destination Red Pointer (matches top pin in user reference image)
+    // 2. Destination Red Pointer (matches top pin in reference image)
     const redData = createTeardropPin({
       height: cfg.pinHeight,
       width: cfg.pinWidth,
@@ -546,7 +592,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     scene.add(arrowGroup);
     arrowMeshRef.current = arrowGroup;
 
-    // 4. Build Start & Destination Pointers with device formatting
+    // 4. Build Start & Destination Pointers with automatic device detection
     rebuildPointers(scene, deviceMode === 'tablet');
 
     // 5. Continuous Glowing Floor Line Pathway Ribbon
@@ -598,7 +644,6 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       }
 
       // Billboard pins to always face the camera eye horizontally (Y-axis billboarding)
-      // This ensures the front face with the hole and needle tip always faces the user
       if (cameraThreeRef.current) {
         const camPos = cameraThreeRef.current.position;
         if (blueDotRef.current) {
@@ -779,7 +824,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           perpZ = dirX / len;
         }
 
-        const yPos = 0.08; // Raised slightly above floor ground plane (reticle rings are at 0.04 - 0.05)
+        const yPos = 0.08; // Raised slightly above floor ground plane
         vertices.push(
           p3d.x - perpX * ribbonWidth,
           yPos,
@@ -824,7 +869,6 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       await rendererRef.current.xr.setSession(session);
       setXrSessionActive(true);
 
-      // WebXR Frame Render Loop
       rendererRef.current.setAnimationLoop((timestamp, frame) => {
         if (!xrSessionActive) return;
         rendererRef.current.render(sceneRef.current, cameraThreeRef.current);
@@ -843,8 +887,21 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     }
   };
 
-  const isArrived = walkProgress >= route.length - 1;
+  // Derive target distance metrics
+  const userPos = getCurrentUserPos();
+  const destNode = destination || (route.length > 0 ? route[route.length - 1] : userPos);
+  const nextNode = route[Math.min(Math.floor(walkProgress) + 1, route.length - 1)] || destNode;
 
+  const distToDest = Math.max(
+    0,
+    Math.round(Math.hypot((destNode.x - userPos.x) * SCALE_METERS, (destNode.y - userPos.y) * SCALE_METERS))
+  );
+  const distToNextTurn = Math.max(
+    0,
+    Math.round(Math.hypot((nextNode.x - userPos.x) * SCALE_METERS, (nextNode.y - userPos.y) * SCALE_METERS))
+  );
+
+  const isArrived = route.length > 1 && walkProgress >= route.length - 1;
 
   return (
     <div className="ar-viewport-container" ref={containerRef}>
@@ -1085,36 +1142,35 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
                 const by = n1.y + (n2.y - n1.y) * frac;
                 return 50 + (by - uPos.y) * 0.12;
               })()}
-              r="4.2"
+              r="4"
               fill="#0284c7"
               stroke="#ffffff"
               strokeWidth="1.5"
             />
           )}
 
-          {/* Destination Node (Red Dot) */}
+          {/* Destination Target Marker (Red Dot) */}
           {route[route.length - 1] && (
             <circle
-              cx={(() => {
-                const uPos = getCurrentUserPos();
-                const dest = route[route.length - 1];
-                return 50 + (dest.x - uPos.x) * 0.12;
-              })()}
-              cy={(() => {
-                const uPos = getCurrentUserPos();
-                const dest = route[route.length - 1];
-                return 50 + (dest.y - uPos.y) * 0.12;
-              })()}
-              r="4.8"
+              cx={50 + (route[route.length - 1].x - getCurrentUserPos().x) * 0.12}
+              cy={50 + (route[route.length - 1].y - getCurrentUserPos().y) * 0.12}
+              r="4.5"
               fill="#f43f5e"
               stroke="#ffffff"
-              strokeWidth="1.8"
+              strokeWidth="1.5"
             />
           )}
 
-          {/* Current Live User Position (Center) */}
-          <circle cx="50" cy="50" r="3.5" fill="#38bdf8" stroke="#ffffff" strokeWidth="1.5" />
+          {/* Live User Position Indicator at Center */}
+          <circle cx="50" cy="50" r="5" fill="#38bdf8" stroke="#ffffff" strokeWidth="2" />
         </svg>
+
+        {/* Live Distance & Target Badge */}
+        {distToDest > 0 && (
+          <div className="radar-dist-chip">
+            🎯 {distToDest}m {destination?.label ? `· ${destination.label.slice(0, 10)}` : ''}
+          </div>
+        )}
       </div>
 
       {/* Main HUD Instruction Card (Physical Motion Tracking & Collapsible Steps Drawer) */}
@@ -1259,7 +1315,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
                 <div className="hud-details">
                   <div className="hud-step-tag hud-step-tag-desktop">
-                    Step {currentStepIndex + 1} of {turnInstructions.length || 1}
+                    Step {currentStepIndex + 1} of {turnInstructions.length || 1} {distToNextTurn > 0 ? `· Next turn in ~${distToNextTurn}m` : ''}
                   </div>
                   <div className="hud-instruction-text">{currentStep.text}</div>
                   <div className="hud-meta">
@@ -1267,11 +1323,11 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
                       🔵 Start: <strong>{startLocation?.label || "Entrance"}</strong>
                     </span>
                     <span className="hud-chip">
-                      🔴 Target: <strong>{currentStep.targetLabel}</strong>
+                      🔴 Target: <strong>{currentStep.targetLabel || destination?.label || "Corridor"}</strong>
                     </span>
-                    {currentStep.distanceMeters > 0 && (
+                    {distToDest > 0 && (
                       <span className="hud-chip highlight">
-                        📏 ~{currentStep.distanceMeters}m
+                        📏 ~{distToDest}m remaining
                       </span>
                     )}
                   </div>
@@ -1279,7 +1335,15 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
               </div>
             ) : (
               <div className="hud-content">
-                <div className="hud-instruction-text">Calculating 3D AR pathway...</div>
+                <div className="hud-icon-box">
+                  <span className="hud-action-emoji">⬆️</span>
+                </div>
+                <div className="hud-details">
+                  <div className="hud-step-tag">AR Guidance</div>
+                  <div className="hud-instruction-text">
+                    {routeLoading ? "Calculating pathway..." : "Follow the glowing ribbon ahead"}
+                  </div>
+                </div>
               </div>
             )}
           </>
@@ -1310,6 +1374,16 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           </div>
 
           <div className="hud-controls-secondary">
+            {/* Toggle Walking Pace Simulation */}
+            <button
+              type="button"
+              className={`hud-icon-btn ${autoWalkPace ? 'active' : ''}`}
+              onClick={() => setAutoWalkPace(!autoWalkPace)}
+              title="Preview walking along ribbon at natural walking pace"
+            >
+              🏃 {autoWalkPace ? 'Walking' : 'Pace'}
+            </button>
+
             {!motionSensorActive && (
               <button
                 type="button"
@@ -1400,6 +1474,14 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
                     setWalkProgress(0);
                     setStepCount(0);
                     setShowAnchorModal(false);
+
+                    // Re-calculate route from new anchor
+                    const destQuery = destination?.label || destination?.type || "Central Library";
+                    setRouteLoading(true);
+                    getRoute(loc.id, destQuery)
+                      .then((res) => setActiveRouteResult(res))
+                      .catch((e) => console.warn(e))
+                      .finally(() => setRouteLoading(false));
                   }}
                 >
                   <div className="anchor-icon">📍</div>

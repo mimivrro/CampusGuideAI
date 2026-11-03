@@ -35,22 +35,25 @@ app.use(
 // ---------------------------------------------------------------------------
 // CORS — Dynamic origin validation for Vercel, localhost, and custom domains
 // ---------------------------------------------------------------------------
+const isDev = process.env.NODE_ENV !== 'production';
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-      if (!origin) return callback(null, true);
+      // Allow requests with no origin or in development
+      if (!origin || isDev) return callback(null, true);
 
       const isAllowed =
         ALLOWED_ORIGINS.includes(origin) ||
         ALLOWED_ORIGINS.includes('*') ||
-        /\.vercel\.app$/.test(origin);
+        /\.vercel\.app$/.test(origin) ||
+        /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin);
 
       if (isAllowed) {
         callback(null, true);
       } else {
         console.warn(`[CORS Blocked] Origin: ${origin}`);
-        callback(new Error(`CORS policy: Origin ${origin} not allowed.`));
+        callback(null, false);
       }
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -58,7 +61,7 @@ app.use(
     credentials: true,
   })
 );
-
+app.options('*', cors());
 // ---------------------------------------------------------------------------
 // Body parsing — limit to 10 KB to prevent large payload attacks
 // ---------------------------------------------------------------------------
