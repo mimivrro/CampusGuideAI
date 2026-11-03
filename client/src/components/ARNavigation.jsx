@@ -370,7 +370,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const blueGroup = new THREE.Group();
     blueGroup.frustumCulled = false;
 
-    const blueSphereGeo = new THREE.SphereGeometry(0.35, 24, 24);
+    const blueSphereGeo = new THREE.SphereGeometry(0.15, 24, 24);
     const blueSphereMat = new THREE.MeshStandardMaterial({
       color: 0x0284c7,
       emissive: 0x38bdf8,
@@ -379,11 +379,11 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       roughness: 0.1
     });
     const blueSphere = new THREE.Mesh(blueSphereGeo, blueSphereMat);
-    blueSphere.position.y = 0.45;
+    blueSphere.position.y = 0.20;
     blueSphere.frustumCulled = false;
     blueGroup.add(blueSphere);
 
-    const blueRingGeo = new THREE.RingGeometry(0.5, 0.9, 32);
+    const blueRingGeo = new THREE.RingGeometry(0.20, 0.38, 32);
     blueRingGeo.rotateX(-Math.PI / 2);
     const blueRingMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
@@ -404,7 +404,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const redGroup = new THREE.Group();
     redGroup.frustumCulled = false;
 
-    const redHeadGeo = new THREE.SphereGeometry(0.45, 24, 24);
+    const redHeadGeo = new THREE.SphereGeometry(0.18, 24, 24);
     const redHeadMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
       emissive: 0xe11d48,
@@ -413,18 +413,18 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       roughness: 0.1
     });
     const redHead = new THREE.Mesh(redHeadGeo, redHeadMat);
-    redHead.position.y = 1.3;
+    redHead.position.y = 0.52;
     redHead.frustumCulled = false;
     redGroup.add(redHead);
 
-    const redConeGeo = new THREE.ConeGeometry(0.38, 1.0, 16);
+    const redConeGeo = new THREE.ConeGeometry(0.15, 0.40, 16);
     redConeGeo.rotateX(Math.PI);
     const redCone = new THREE.Mesh(redConeGeo, redHeadMat);
-    redCone.position.y = 0.5;
+    redCone.position.y = 0.20;
     redCone.frustumCulled = false;
     redGroup.add(redCone);
 
-    const redRingGeo = new THREE.RingGeometry(0.7, 1.2, 32);
+    const redRingGeo = new THREE.RingGeometry(0.28, 0.50, 32);
     redRingGeo.rotateX(-Math.PI / 2);
     const redRingMat = new THREE.MeshBasicMaterial({
       color: 0xf43f5e,
