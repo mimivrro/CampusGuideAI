@@ -336,7 +336,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const arrowGroup = new THREE.Group();
     arrowGroup.frustumCulled = false;
 
-    const arrowGeo = new THREE.ConeGeometry(0.35, 1.1, 16);
+    const arrowGeo = new THREE.ConeGeometry(0.12, 0.40, 16);
     arrowGeo.rotateX(Math.PI / 2);
     const arrowMat = new THREE.MeshStandardMaterial({
       color: 0x00f5ff,
@@ -349,7 +349,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     arrowMesh.frustumCulled = false;
     arrowGroup.add(arrowMesh);
 
-    const arrowRingGeo = new THREE.RingGeometry(0.4, 0.65, 32);
+    const arrowRingGeo = new THREE.RingGeometry(0.14, 0.24, 32);
     arrowRingGeo.rotateX(-Math.PI / 2);
     const arrowRingMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
@@ -358,11 +358,11 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       opacity: 0.85
     });
     const arrowRing = new THREE.Mesh(arrowRingGeo, arrowRingMat);
-    arrowRing.position.y = -0.3;
+    arrowRing.position.y = -0.12;
     arrowRing.frustumCulled = false;
     arrowGroup.add(arrowRing);
 
-    arrowGroup.position.set(0, 0.75, -2.8);
+    arrowGroup.position.set(0, 0.50, -2.5);
     scene.add(arrowGroup);
     arrowMeshRef.current = arrowGroup;
 
@@ -370,7 +370,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const blueGroup = new THREE.Group();
     blueGroup.frustumCulled = false;
 
-    const blueSphereGeo = new THREE.SphereGeometry(0.15, 24, 24);
+    const blueSphereGeo = new THREE.SphereGeometry(0.08, 24, 24);
     const blueSphereMat = new THREE.MeshStandardMaterial({
       color: 0x0284c7,
       emissive: 0x38bdf8,
@@ -379,11 +379,11 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       roughness: 0.1
     });
     const blueSphere = new THREE.Mesh(blueSphereGeo, blueSphereMat);
-    blueSphere.position.y = 0.20;
+    blueSphere.position.y = 0.14;
     blueSphere.frustumCulled = false;
     blueGroup.add(blueSphere);
 
-    const blueRingGeo = new THREE.RingGeometry(0.20, 0.38, 32);
+    const blueRingGeo = new THREE.RingGeometry(0.10, 0.20, 32);
     blueRingGeo.rotateX(-Math.PI / 2);
     const blueRingMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
@@ -404,7 +404,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const redGroup = new THREE.Group();
     redGroup.frustumCulled = false;
 
-    const redHeadGeo = new THREE.SphereGeometry(0.18, 24, 24);
+    const redHeadGeo = new THREE.SphereGeometry(0.12, 24, 24);
     const redHeadMat = new THREE.MeshStandardMaterial({
       color: 0xf43f5e,
       emissive: 0xe11d48,
@@ -413,18 +413,18 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       roughness: 0.1
     });
     const redHead = new THREE.Mesh(redHeadGeo, redHeadMat);
-    redHead.position.y = 0.52;
+    redHead.position.y = 0.36;
     redHead.frustumCulled = false;
     redGroup.add(redHead);
 
-    const redConeGeo = new THREE.ConeGeometry(0.15, 0.40, 16);
+    const redConeGeo = new THREE.ConeGeometry(0.10, 0.26, 16);
     redConeGeo.rotateX(Math.PI);
     const redCone = new THREE.Mesh(redConeGeo, redHeadMat);
-    redCone.position.y = 0.20;
+    redCone.position.y = 0.15;
     redCone.frustumCulled = false;
     redGroup.add(redCone);
 
-    const redRingGeo = new THREE.RingGeometry(0.28, 0.50, 32);
+    const redRingGeo = new THREE.RingGeometry(0.16, 0.30, 32);
     redRingGeo.rotateX(-Math.PI / 2);
     const redRingMat = new THREE.MeshBasicMaterial({
       color: 0xf43f5e,
@@ -487,7 +487,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
       // Gentle arrow bob
       if (arrowMeshRef.current) {
-        arrowMeshRef.current.position.y = 0.75 + Math.sin(time * 3.5) * 0.08;
+        arrowMeshRef.current.position.y = 0.50 + Math.sin(time * 3.5) * 0.04;
       }
 
       // Destination pin spin & pulsing floor ring
@@ -612,7 +612,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       const targetP = points3D[Math.min(3, points3D.length - 1)];
       const angleRad = Math.atan2(targetP.x, -targetP.z);
       arrowMeshRef.current.rotation.y = angleRad;
-      arrowMeshRef.current.position.set(targetP.x * 0.35, 0.75, Math.max(-3.8, Math.min(-1.6, targetP.z)));
+      arrowMeshRef.current.position.set(targetP.x * 0.35, 0.50, Math.max(-3.8, Math.min(-1.6, targetP.z)));
       arrowMeshRef.current.visible = true;
     }
 
