@@ -1,15 +1,149 @@
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
-import { calculateBearing, speakInstruction, getActionIconSvg } from '../services/arUtils';
+import {
+  speakInstruction,
+  getActionIconSvg,
+  isTabletDevice,
+  getPointerConfig,
+  smoothAngle,
+  getScreenOrientationAngle,
+  filterLinearAcceleration,
+} from '../services/arUtils';
+
+/**
+ * Creates the exact dual-tone teardrop location pin from the reference image.
+ * Features:
+ * - Sharp bottom needle tip pointing directly down at the ground
+ * - Large circular hole in the head so the path and environment are visible through it
+ * - 3D dual-tone split (darker left half, lighter right half)
+ * - Soft elliptical ground drop-shadow beneath the tip
+ */
+function createTeardropPin({
+  height,
+  width,
+  holeRadius,
+  depth,
+  shadowX,
+  shadowZ,
+  leftColor,
+  rightColor,
+  emissiveLeft,
+  emissiveRight,
+}) {
+  const group = new THREE.Group();
+  group.frustumCulled = false;
+
+  const R = width / 2;
+  const Yc = height - R;
+  const r = holeRadius;
+  const theta = Math.asin(Math.min(0.99, R / Yc));
+  const XtLeft = -R * Math.cos(theta);
+  const YtLeft = Yc - R * Math.sin(theta);
+
+  // 1. Left Half Shape
+  const shapeLeft = new THREE.Shape();
+  shapeLeft.moveTo(0, 0); // Tip
+  shapeLeft.lineTo(XtLeft, YtLeft); // Left straight edge
+  // Outer arc around top-left to top center (0, height)
+  shapeLeft.absarc(0, Yc, R, -Math.PI + theta, Math.PI / 2, true);
+  // Center line down to top of inner circular hole
+  shapeLeft.lineTo(0, Yc + r);
+  // Inner arc around left side of hole to bottom of hole (0, Yc - r)
+  shapeLeft.absarc(0, Yc, r, Math.PI / 2, -Math.PI / 2, false);
+  // Center line down to tip (0, 0)
+  shapeLeft.lineTo(0, 0);
+
+  // 2. Right Half Shape
+  const shapeRight = new THREE.Shape();
+  shapeRight.moveTo(0, 0); // Tip
+  // Center line up to bottom of inner circular hole
+  shapeRight.lineTo(0, Yc - r);
+  // Inner arc around right side of hole to top of hole (0, Yc + r)
+  shapeRight.absarc(0, Yc, r, -Math.PI / 2, Math.PI / 2, false);
+  // Center line up to top center (0, height)
+  shapeRight.lineTo(0, height);
+  // Outer arc around top-right to right tangent point (XtRight, YtRight)
+  shapeRight.absarc(0, Yc, R, Math.PI / 2, -theta, true);
+  // Right straight edge down to tip (0, 0)
+  shapeRight.lineTo(0, 0);
+
+  const extrudeSettings = {
+    depth: depth,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    steps: 1,
+    bevelSize: 0.004,
+    bevelThickness: 0.004,
+  };
+
+  const geoLeft = new THREE.ExtrudeGeometry(shapeLeft, extrudeSettings);
+  geoLeft.translate(0, 0, -depth / 2);
+  const matLeft = new THREE.MeshStandardMaterial({
+    color: leftColor,
+    emissive: emissiveLeft,
+    emissiveIntensity: 0.45,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  const meshLeft = new THREE.Mesh(geoLeft, matLeft);
+  meshLeft.frustumCulled = false;
+
+  const geoRight = new THREE.ExtrudeGeometry(shapeRight, extrudeSettings);
+  geoRight.translate(0, 0, -depth / 2);
+  const matRight = new THREE.MeshStandardMaterial({
+    color: rightColor,
+    emissive: emissiveRight,
+    emissiveIntensity: 0.55,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  const meshRight = new THREE.Mesh(geoRight, matRight);
+  meshRight.frustumCulled = false;
+
+  // Container for the 3D pin body (rests tip at y = 0.09, just above floor ribbon)
+  const pinBody = new THREE.Group();
+  pinBody.add(meshLeft);
+  pinBody.add(meshRight);
+  pinBody.position.y = 0.09;
+  pinBody.frustumCulled = false;
+  group.add(pinBody);
+
+  // 3. Ground Drop Shadow (matching the image)
+  const shadowGeo = new THREE.CircleGeometry(shadowX, 32);
+  shadowGeo.rotateX(-Math.PI / 2);
+  shadowGeo.scale(1, 1, shadowZ / shadowX);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+  });
+  const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
+  shadowMesh.position.y = 0.02; // Flush with floor
+  shadowMesh.frustumCulled = false;
+  group.add(shadowMesh);
+
+  return {
+    group,
+    pinBody,
+    shadowMesh,
+    baseY: 0.09,
+    shadowBaseScaleX: 1,
+    shadowBaseScaleZ: shadowZ / shadowX,
+  };
+}
 
 /**
  * ARNavigation.jsx
  *
  * Immersive WebAR / ARCore 3D Interior Navigation Viewport.
+ * - Dynamic Phone vs. Tablet sizing: Pointers are sized and elevated specifically for
+ *   each device form factor, with hollow reticles to keep the glowing green floor pathway 100% visible.
  * - NO PRECODED TIMERS: 3D position and step progression only change when the user physically walks
- *   (via Device Motion pedometer step detection) or manually taps "Step Forward".
- * - Renders a continuous 3D floor pathway ribbon connecting Start (Blue Dot) to Destination (Red Dot).
- * - Real-time Gyroscope compass orientation.
+ *   (via linear accelerometer pedometer step detection) or manually taps "Step Forward".
+ * - Renders a continuous 3D floor pathway ribbon connecting Start (Holo-Beacon) to Destination (Waypoint).
+ * - Real-time Gyroscope compass orientation with screen angle orientation compensation.
+ * - Full WebXR Google ARCore support with Three.js XR camera binding.
  * - Dynamic hands-free turn guidance HUD that reacts to physical walking movement.
  */
 function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
@@ -27,16 +161,36 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
   const [xrSessionActive, setXrSessionActive] = useState(false);
   const [showAnchorModal, setShowAnchorModal] = useState(false);
 
+  // Automatic Device Form Factor Detection (Phone vs iPad/Tablet) - NO BUTTON
+  const [deviceMode, setDeviceMode] = useState(() => (isTabletDevice() ? 'tablet' : 'phone'));
+
+  useEffect(() => {
+    function handleDeviceCheck() {
+      const tablet = isTabletDevice();
+      setDeviceMode(tablet ? 'tablet' : 'phone');
+    }
+    window.addEventListener('resize', handleDeviceCheck);
+    window.addEventListener('orientationchange', handleDeviceCheck);
+    return () => {
+      window.removeEventListener('resize', handleDeviceCheck);
+      window.removeEventListener('orientationchange', handleDeviceCheck);
+    };
+  }, []);
+
   // Physical Motion / Pedometer Step State (NO TIMERS!)
   const [walkProgress, setWalkProgress] = useState(0); // Progress index along route (0.0 to route.length - 1)
   const [stepCount, setStepCount] = useState(0);
   const [motionSensorActive, setMotionSensorActive] = useState(false);
+  const [pedometerSensitivity, setPedometerSensitivity] = useState('normal'); // 'high' | 'normal' | 'low'
   const [lastStepFeedback, setLastStepFeedback] = useState(false);
-  const [isStepsExpanded, setIsStepsExpanded] = useState(false); // Collapsible drawer: false = kept down (see path), true = kept up (see all steps)
+  const [isStepsExpanded, setIsStepsExpanded] = useState(false); // Collapsible drawer
   const [dismissSimulatedNotice, setDismissSimulatedNotice] = useState(false);
 
-  const route = routeResult?.route ?? [];
-  const turnInstructions = routeResult?.turnInstructions ?? [];
+  const route = useMemo(() => routeResult?.route ?? [], [routeResult?.route]);
+  const turnInstructions = useMemo(
+    () => routeResult?.turnInstructions ?? [],
+    [routeResult?.turnInstructions]
+  );
   const destination = routeResult?.destination ?? null;
   const startLocation = route[0] ?? null;
 
@@ -58,13 +212,17 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
   const arrowMeshRef = useRef(null);
   const blueDotRef = useRef(null);
   const redDotRef = useRef(null);
+  const startPartsRef = useRef(null);
+  const destPartsRef = useRef(null);
   const pathLineRef = useRef(null);
   const animFrameId = useRef(null);
+  const gravityRef = useRef({ x: 0, y: 9.8, z: 0 });
 
   // Check WebXR AR support
   useEffect(() => {
     if ('xr' in navigator) {
-      navigator.xr.isSessionSupported('immersive-ar')
+      navigator.xr
+        .isSessionSupported('immersive-ar')
         .then((supported) => setWebXRSupported(supported))
         .catch(() => setWebXRSupported(false));
     }
@@ -78,96 +236,114 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       const cams = devices.filter((d) => d.kind === 'videoinput');
       setVideoDevices(cams);
     } catch (e) {
-      console.warn("Could not enumerate camera devices:", e);
+      console.warn('Could not enumerate camera devices:', e);
     }
   }, []);
 
   // Request Camera Stream
-  const startCamera = useCallback(async (deviceId = null) => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setCameraError("Camera API not supported in this browser context.");
-      setCameraActive(false);
-      return;
-    }
+  const startCamera = useCallback(
+    async (deviceId = null) => {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Camera API not supported in this browser context.');
+        setCameraActive(false);
+        return;
+      }
 
-    let stream = null;
-    try {
-      if (deviceId) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: deviceId } }
-        });
-      } else {
-        try {
+      let stream = null;
+      try {
+        if (deviceId) {
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' } }
+            video: { deviceId: { exact: deviceId } },
           });
-        } catch {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        } else {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: 'environment' } },
+            });
+          } catch {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          }
         }
-      }
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        try {
-          await videoRef.current.play();
-        } catch (pErr) {
-          console.warn("Video play interrupted:", pErr);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          try {
+            await videoRef.current.play();
+          } catch (pErr) {
+            console.warn('Video play interrupted:', pErr);
+          }
         }
+        setCameraActive(true);
+        setCameraError(null);
+        await loadVideoDevices();
+      } catch (err) {
+        console.warn('Camera access failed:', err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setCameraError(
+            'Camera permission blocked. Click the lock icon in the address bar -> Allow Camera -> Refresh.'
+          );
+        } else if (err.name === 'NotFoundError') {
+          setCameraError('No camera device detected on this system.');
+        } else {
+          setCameraError(`Camera unavailable (${err.name || 'Error'}).`);
+        }
+        setCameraActive(false);
       }
-      setCameraActive(true);
-      setCameraError(null);
-      await loadVideoDevices();
-    } catch (err) {
-      console.warn("Camera access failed:", err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setCameraError("Camera permission blocked. Click the lock icon in the address bar -> Allow Camera -> Refresh.");
-      } else if (err.name === 'NotFoundError') {
-        setCameraError("No camera device detected on this system.");
-      } else {
-        setCameraError(`Camera unavailable (${err.name || 'Error'}).`);
-      }
-      setCameraActive(false);
-    }
-  }, [loadVideoDevices]);
+    },
+    [loadVideoDevices]
+  );
 
   useEffect(() => {
     startCamera(selectedDeviceId);
   }, [selectedDeviceId, startCamera]);
 
-  // Gyroscope / Compass orientation
+  // Gyroscope / Compass orientation with screen angle compensation
   useEffect(() => {
     function handleOrientation(e) {
       if (!autoRotate) return;
       let alpha = e.alpha;
-      if (e.webkitCompassHeading) {
+      if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+        // iOS Safari gives compass heading relative to true north
         alpha = e.webkitCompassHeading;
       }
       if (alpha !== null && alpha !== undefined) {
-        setHeading((prev) => {
-          const diff = (alpha - prev + 540) % 360 - 180;
-          return (prev + diff * 0.15 + 360) % 360;
-        });
+        // Adjust for device screen orientation (landscape tablets vs portrait phones)
+        const screenAngle = getScreenOrientationAngle();
+        const adjustedHeading = (alpha + screenAngle + 360) % 360;
+
+        setHeading((prev) => smoothAngle(prev, adjustedHeading, 0.18));
       }
     }
 
-    if (window.DeviceOrientationEvent) {
+    if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+    } else if (window.DeviceOrientationEvent) {
       window.addEventListener('deviceorientation', handleOrientation, true);
     }
+
     return () => {
+      if ('ondeviceorientationabsolute' in window) {
+        window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+      }
       if (window.DeviceOrientationEvent) {
         window.removeEventListener('deviceorientation', handleOrientation, true);
       }
     };
   }, [autoRotate]);
 
-  // Function to manually take 1 physical step forward along route
-  const advanceStep = useCallback((stepMagnitude = 0.12) => {
-    if (!route || route.length < 2) return;
-    setStepCount((c) => c + 1);
-    setWalkProgress((prev) => Math.min(route.length - 1, prev + stepMagnitude));
-    setLastStepFeedback(true);
-    setTimeout(() => setLastStepFeedback(false), 300);
-  }, [route]);
+  // Function to take 1 physical step forward along route
+  const advanceStep = useCallback(
+    (stepMagnitude = null) => {
+      if (!route || route.length < 2) return;
+      const pointerCfg = getPointerConfig(deviceMode === 'tablet');
+      const mag = stepMagnitude ?? pointerCfg.strideAdvance;
+      setStepCount((c) => c + 1);
+      setWalkProgress((prev) => Math.min(route.length - 1, prev + mag));
+      setLastStepFeedback(true);
+      setTimeout(() => setLastStepFeedback(false), 300);
+    },
+    [route, deviceMode]
+  );
 
   // Request Motion Sensors (iOS 13+ & Android permission prompt)
   const enableMotionSensor = useCallback(async () => {
@@ -180,7 +356,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           alert("Motion sensor permission denied. You can tap 'Step Forward' to walk along the route.");
         }
       } catch (err) {
-        console.warn("Motion permission request failed:", err);
+        console.warn('Motion permission request failed:', err);
       }
     } else {
       setMotionSensorActive(true);
@@ -194,19 +370,31 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
     function handleMotion(e) {
       if (!route || route.length < 2) return;
-      const acc = e.accelerationIncludingGravity || e.acceleration;
-      if (!acc) return;
+      const rawAcc = e.accelerationIncludingGravity || e.acceleration;
+      if (!rawAcc) return;
 
-      const mag = Math.sqrt((acc.x || 0) ** 2 + (acc.y || 0) ** 2 + (acc.z || 0) ** 2);
+      const pointerCfg = getPointerConfig(deviceMode === 'tablet');
+
+      // Filter linear acceleration by extracting gravity
+      const linear = e.acceleration || filterLinearAcceleration(rawAcc, gravityRef.current, 0.82);
+      const mag =
+        linear.magnitude !== undefined
+          ? linear.magnitude
+          : Math.hypot(linear.x || 0, linear.y || 0, linear.z || 0);
+
       const delta = Math.abs(mag - lastMag);
       lastMag = mag;
 
       const now = Date.now();
-      // Detect footstep impact acceleration spike (> 2.8 m/s² difference with min 380ms stride interval)
-      if (delta > 2.8 && (now - lastStepTime > 380)) {
+      let threshold = pointerCfg.stepDeltaThreshold;
+      if (pedometerSensitivity === 'high') threshold *= 0.65;
+      if (pedometerSensitivity === 'low') threshold *= 1.45;
+
+      const minInterval = deviceMode === 'tablet' ? 360 : 320;
+      if (delta > threshold && now - lastStepTime > minInterval) {
         lastStepTime = now;
         setMotionSensorActive(true);
-        advanceStep(0.12); // Advance position proportional to physical step (~0.7m stride)
+        advanceStep(pointerCfg.strideAdvance);
       }
     }
 
@@ -218,7 +406,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         window.removeEventListener('devicemotion', handleMotion);
       }
     };
-  }, [route, advanceStep]);
+  }, [route, advanceStep, deviceMode, pedometerSensitivity]);
 
   // Voice Instruction triggers ONLY when physical step index advances
   useEffect(() => {
@@ -226,6 +414,71 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       speakInstruction(currentStep.text);
     }
   }, [currentStepIndex, voiceEnabled, currentStep]);
+
+  // Rebuild Pointers helper (disposing old geometries to prevent GPU memory leaks)
+  const rebuildPointers = useCallback((scene, isTablet) => {
+    if (!scene) return;
+
+    if (blueDotRef.current) {
+      scene.remove(blueDotRef.current);
+      blueDotRef.current.traverse((child) => {
+        if (child.isMesh) {
+          child.geometry?.dispose();
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material?.dispose();
+        }
+      });
+      blueDotRef.current = null;
+    }
+
+    if (redDotRef.current) {
+      scene.remove(redDotRef.current);
+      redDotRef.current.traverse((child) => {
+        if (child.isMesh) {
+          child.geometry?.dispose();
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material?.dispose();
+        }
+      });
+      redDotRef.current = null;
+    }
+
+    const cfg = getPointerConfig(isTablet);
+
+    // 1. Initial / Walking Blue Pointer (matches bottom pin in user reference image)
+    const blueData = createTeardropPin({
+      height: cfg.pinHeight,
+      width: cfg.pinWidth,
+      holeRadius: cfg.holeRadius,
+      depth: cfg.depth,
+      shadowX: cfg.shadowRadiusX,
+      shadowZ: cfg.shadowRadiusZ,
+      leftColor: 0x0277bd,    // Deep royal blue (left half)
+      rightColor: 0x03a9f4,   // Vibrant cyan-blue (right half)
+      emissiveLeft: 0x01579b,
+      emissiveRight: 0x0288d1,
+    });
+    scene.add(blueData.group);
+    blueDotRef.current = blueData.group;
+    startPartsRef.current = blueData;
+
+    // 2. Destination Red Pointer (matches top pin in user reference image)
+    const redData = createTeardropPin({
+      height: cfg.pinHeight,
+      width: cfg.pinWidth,
+      holeRadius: cfg.holeRadius,
+      depth: cfg.depth,
+      shadowX: cfg.shadowRadiusX,
+      shadowZ: cfg.shadowRadiusZ,
+      leftColor: 0xc5222f,    // Deep crimson/burgundy (left half)
+      rightColor: 0xef4444,   // Vibrant scarlet (right half)
+      emissiveLeft: 0x991b1b,
+      emissiveRight: 0xdc2626,
+    });
+    scene.add(redData.group);
+    redDotRef.current = redData.group;
+    destPartsRef.current = redData;
+  }, []);
 
   // Initialize Three.js 3D WebAR Scene
   useEffect(() => {
@@ -245,7 +498,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       alpha: true,
-      antialias: true
+      antialias: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
@@ -270,7 +523,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       emissive: 0x0284c7,
       emissiveIntensity: 1.0,
       metalness: 0.3,
-      roughness: 0.1
+      roughness: 0.1,
     });
     const arrowMesh = new THREE.Mesh(arrowGeo, arrowMat);
     arrowMesh.frustumCulled = false;
@@ -282,7 +535,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       color: 0x38bdf8,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.85
+      opacity: 0.85,
     });
     const arrowRing = new THREE.Mesh(arrowRingGeo, arrowRingMat);
     arrowRing.position.y = -0.3;
@@ -293,90 +546,20 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     scene.add(arrowGroup);
     arrowMeshRef.current = arrowGroup;
 
-    // 4. Blue Dot Marker (Start Node)
-    const blueGroup = new THREE.Group();
-    blueGroup.frustumCulled = false;
+    // 4. Build Start & Destination Pointers with device formatting
+    rebuildPointers(scene, deviceMode === 'tablet');
 
-    const blueSphereGeo = new THREE.SphereGeometry(0.4, 24, 24);
-    const blueSphereMat = new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
-      emissive: 0x38bdf8,
-      emissiveIntensity: 0.9,
-      metalness: 0.5,
-      roughness: 0.1
-    });
-    const blueSphere = new THREE.Mesh(blueSphereGeo, blueSphereMat);
-    blueSphere.position.y = 0.5;
-    blueSphere.frustumCulled = false;
-    blueGroup.add(blueSphere);
-
-    const blueRingGeo = new THREE.RingGeometry(0.6, 1.0, 32);
-    blueRingGeo.rotateX(-Math.PI / 2);
-    const blueRingMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.8
-    });
-    const blueRing = new THREE.Mesh(blueRingGeo, blueRingMat);
-    blueRing.position.y = 0.05;
-    blueRing.frustumCulled = false;
-    blueGroup.add(blueRing);
-
-    scene.add(blueGroup);
-    blueDotRef.current = blueGroup;
-
-    // 5. Red Dot Marker (Destination Node)
-    const redGroup = new THREE.Group();
-    redGroup.frustumCulled = false;
-
-    const redHeadGeo = new THREE.SphereGeometry(0.5, 24, 24);
-    const redHeadMat = new THREE.MeshStandardMaterial({
-      color: 0xf43f5e,
-      emissive: 0xe11d48,
-      emissiveIntensity: 1.0,
-      metalness: 0.5,
-      roughness: 0.1
-    });
-    const redHead = new THREE.Mesh(redHeadGeo, redHeadMat);
-    redHead.position.y = 1.3;
-    redHead.frustumCulled = false;
-    redGroup.add(redHead);
-
-    const redConeGeo = new THREE.ConeGeometry(0.4, 1.1, 16);
-    redConeGeo.rotateX(Math.PI);
-    const redCone = new THREE.Mesh(redConeGeo, redHeadMat);
-    redCone.position.y = 0.5;
-    redCone.frustumCulled = false;
-    redGroup.add(redCone);
-
-    const redRingGeo = new THREE.RingGeometry(0.8, 1.4, 32);
-    redRingGeo.rotateX(-Math.PI / 2);
-    const redRingMat = new THREE.MeshBasicMaterial({
-      color: 0xf43f5e,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.85
-    });
-    const redRing = new THREE.Mesh(redRingGeo, redRingMat);
-    redRing.position.y = 0.05;
-    redRing.frustumCulled = false;
-    redGroup.add(redRing);
-
-    scene.add(redGroup);
-    redDotRef.current = redGroup;
-
-    // 6. Continuous Glowing Floor Line Pathway Ribbon
+    // 5. Continuous Glowing Floor Line Pathway Ribbon
     const pathGeometry = new THREE.BufferGeometry();
     const pathMaterial = new THREE.MeshStandardMaterial({
       color: 0x34d399,
       emissive: 0x059669,
-      emissiveIntensity: 0.9,
+      emissiveIntensity: 0.95,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.88,
       roughness: 0.2,
-      depthWrite: false
+      depthWrite: false,
     });
     const pathMesh = new THREE.Mesh(pathGeometry, pathMaterial);
     pathMesh.frustumCulled = false;
@@ -390,14 +573,44 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       time += 0.03;
 
       if (arrowMeshRef.current) {
-        arrowMeshRef.current.position.y = 0.8 + Math.sin(time * 3) * 0.1;
+        arrowMeshRef.current.position.y = 0.85 + Math.sin(time * 3) * 0.08;
       }
-      if (blueDotRef.current) {
-        blueDotRef.current.rotation.y += 0.01;
+
+      // Subtle floating bob for pins (matching physical ground drop shadow)
+      const bob = Math.sin(time * 2.2) * 0.015;
+
+      if (startPartsRef.current) {
+        const { pinBody, shadowMesh, baseY, shadowBaseScaleX, shadowBaseScaleZ } = startPartsRef.current;
+        if (pinBody) pinBody.position.y = baseY + bob;
+        if (shadowMesh) {
+          const s = 1.0 - bob * 2.5;
+          shadowMesh.scale.set(shadowBaseScaleX * s, 1, shadowBaseScaleZ * s);
+        }
       }
-      if (redDotRef.current) {
-        redDotRef.current.position.y = Math.sin(time * 2) * 0.12;
-        redDotRef.current.rotation.y += 0.02;
+
+      if (destPartsRef.current) {
+        const { pinBody, shadowMesh, baseY, shadowBaseScaleX, shadowBaseScaleZ } = destPartsRef.current;
+        if (pinBody) pinBody.position.y = baseY + bob;
+        if (shadowMesh) {
+          const s = 1.0 - bob * 2.5;
+          shadowMesh.scale.set(shadowBaseScaleX * s, 1, shadowBaseScaleZ * s);
+        }
+      }
+
+      // Billboard pins to always face the camera eye horizontally (Y-axis billboarding)
+      // This ensures the front face with the hole and needle tip always faces the user
+      if (cameraThreeRef.current) {
+        const camPos = cameraThreeRef.current.position;
+        if (blueDotRef.current) {
+          const dx = camPos.x - blueDotRef.current.position.x;
+          const dz = camPos.z - blueDotRef.current.position.z;
+          blueDotRef.current.rotation.y = Math.atan2(dx, dz);
+        }
+        if (redDotRef.current) {
+          const dx = camPos.x - redDotRef.current.position.x;
+          const dz = camPos.z - redDotRef.current.position.z;
+          redDotRef.current.rotation.y = Math.atan2(dx, dz);
+        }
       }
 
       renderer.render(scene, camera);
@@ -411,6 +624,13 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       cameraThreeRef.current.aspect = w / h;
       cameraThreeRef.current.updateProjectionMatrix();
       rendererRef.current.setSize(w, h);
+
+      const tablet = isTabletDevice();
+      setDeviceMode((prev) => {
+        if (tablet && prev !== 'tablet') return 'tablet';
+        if (!tablet && prev !== 'phone') return 'phone';
+        return prev;
+      });
     }
     window.addEventListener('resize', handleResize);
 
@@ -419,7 +639,14 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       if (animFrameId.current) cancelAnimationFrame(animFrameId.current);
       renderer.dispose();
     };
-  }, []);
+  }, [rebuildPointers, deviceMode]);
+
+  // Rebuild pointers when device formatting changes
+  useEffect(() => {
+    if (sceneRef.current) {
+      rebuildPointers(sceneRef.current, deviceMode === 'tablet');
+    }
+  }, [deviceMode, rebuildPointers]);
 
   // Helper to transform map node (x, y) to 3D Camera relative position
   const transformToCameraSpace = useCallback((node, userPos, compassHeading) => {
@@ -427,14 +654,11 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     const dx = (node.x - userPos.x) * scale;
     const dy = (node.y - userPos.y) * scale;
 
-    // Angle of map vector
     const mapAngle = Math.atan2(dy, dx);
-    // Device heading in radians (0 deg = North)
     const headingRad = ((compassHeading - 90) * Math.PI) / 180;
     const relAngle = mapAngle - headingRad;
     const dist = Math.hypot(dx, dy);
 
-    // Three.js Camera frame: -Z is forward, +X is right, Y is height
     const x3d = Math.sin(relAngle) * dist;
     const z3d = -Math.cos(relAngle) * dist;
 
@@ -454,7 +678,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
 
     return {
       x: n1.x + (n2.x - n1.x) * frac,
-      y: n1.y + (n2.y - n1.y) * frac
+      y: n1.y + (n2.y - n1.y) * frac,
     };
   }, [route, walkProgress]);
 
@@ -463,20 +687,51 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
     if (!route || route.length < 2) return;
 
     const userPos = getCurrentUserPos();
+    const isTablet = deviceMode === 'tablet';
+    const pointerCfg = getPointerConfig(isTablet);
 
-    // 1. Position Blue Dot (Start Node)
-    if (blueDotRef.current && route[0]) {
-      const pos3d = transformToCameraSpace(route[0], userPos, heading);
-      blueDotRef.current.position.set(pos3d.x, pos3d.y, pos3d.z);
+    // Helper to calculate 2D map position at fractional progress along route
+    const getRoutePosAtProgress = (progress) => {
+      if (!route || route.length === 0) return { x: 0, y: 0 };
+      if (route.length === 1) return { x: route[0].x, y: route[0].y };
+
+      const idx = Math.min(Math.floor(progress), route.length - 2);
+      const frac = progress - idx;
+      const n1 = route[idx];
+      const n2 = route[idx + 1] || n1;
+
+      return {
+        x: n1.x + (n2.x - n1.x) * frac,
+        y: n1.y + (n2.y - n1.y) * frac,
+      };
+    };
+
+    // 1. Position Blue Pointer (Initial pointer that moves as we walk along our path)
+    if (blueDotRef.current && route.length > 0) {
+      // Guide position along pathway ribbon (advances ahead as the user walks)
+      const blueTargetProgress = Math.min(
+        route.length - 1,
+        walkProgress + (walkProgress < route.length - 1 ? pointerCfg.guideAdvanceOffset : 0)
+      );
+      const bluePos2D = getRoutePosAtProgress(blueTargetProgress);
+      const pos3d = transformToCameraSpace(bluePos2D, userPos, heading);
+      blueDotRef.current.position.set(pos3d.x, 0, pos3d.z);
+
+      const s = pointerCfg.scale;
+      blueDotRef.current.scale.set(s, s, s);
     }
 
-    // 2. Position Red Dot (Destination Node)
+    // 2. Position Red Pointer (Fixed at final destination)
     if (redDotRef.current && route[route.length - 1]) {
-      const pos3d = transformToCameraSpace(route[route.length - 1], userPos, heading);
-      redDotRef.current.position.set(pos3d.x, pos3d.y, pos3d.z);
+      const destNode = route[route.length - 1];
+      const pos3d = transformToCameraSpace(destNode, userPos, heading);
+      redDotRef.current.position.set(pos3d.x, 0, pos3d.z);
+
+      const s = pointerCfg.scale;
+      redDotRef.current.scale.set(s, s, s);
     }
 
-    // 3. Point Floating 3D Turn Arrow towards Next Waypoint (Clamped within mobile camera FOV)
+    // 3. Point Floating 3D Turn Arrow towards Next Waypoint
     const nextNodeIdx = Math.min(Math.floor(walkProgress) + 1, route.length - 1);
     const nextNode = route[nextNodeIdx];
     if (arrowMeshRef.current && nextNode) {
@@ -485,17 +740,20 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       arrowMeshRef.current.rotation.y = angleRad;
 
       const arrowDist = 2.0; // Fixed distance in front of camera
-      const maxClampedX = 0.65; // Keep inside mobile screen portrait width
+      const maxClampedX = pointerCfg.arrowMaxX;
       const targetX = Math.sin(angleRad) * arrowDist;
       const clampedX = Math.max(-maxClampedX, Math.min(maxClampedX, targetX));
 
       arrowMeshRef.current.position.x = clampedX;
       arrowMeshRef.current.position.z = -Math.cos(angleRad) * arrowDist;
+
+      const arrowScale = isTablet ? 1.15 : 0.85;
+      arrowMeshRef.current.scale.set(arrowScale, arrowScale, arrowScale);
     }
 
     // 4. Generate Continuous 3D Floor Pathway Ribbon Mesh (All Route Nodes)
     if (pathLineRef.current) {
-      const ribbonWidth = 0.35;
+      const ribbonWidth = pointerCfg.ribbonWidth;
       const vertices = [];
       const indices = [];
 
@@ -503,7 +761,8 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         const p3d = transformToCameraSpace(route[i], userPos, heading);
 
         // Compute tangent direction for ribbon thickness
-        let perpX = 1, perpZ = 0;
+        let perpX = 1,
+          perpZ = 0;
         if (i < route.length - 1) {
           const pNext = transformToCameraSpace(route[i + 1], userPos, heading);
           const dirX = pNext.x - p3d.x;
@@ -520,10 +779,14 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           perpZ = dirX / len;
         }
 
-        const yPos = 0.08; // Slightly raised above floor ground plane
+        const yPos = 0.08; // Raised slightly above floor ground plane (reticle rings are at 0.04 - 0.05)
         vertices.push(
-          p3d.x - perpX * ribbonWidth, yPos, p3d.z - perpZ * ribbonWidth,
-          p3d.x + perpX * ribbonWidth, yPos, p3d.z + perpZ * ribbonWidth
+          p3d.x - perpX * ribbonWidth,
+          yPos,
+          p3d.z - perpZ * ribbonWidth,
+          p3d.x + perpX * ribbonWidth,
+          yPos,
+          p3d.z + perpZ * ribbonWidth
         );
       }
 
@@ -534,7 +797,6 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
       }
 
       if (vertices.length >= 6) {
-        // Create fresh geometry & dispose old geometry so WebGL updates GPU buffer reliably on mobile
         const newGeo = new THREE.BufferGeometry();
         newGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         newGeo.setIndex(indices);
@@ -547,25 +809,42 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         pathLineRef.current.geometry = newGeo;
       }
     }
-  }, [route, walkProgress, heading, transformToCameraSpace, getCurrentUserPos]);
+  }, [route, walkProgress, heading, transformToCameraSpace, getCurrentUserPos, deviceMode]);
 
-  // Launch Google ARCore WebXR session
+  // Launch Google ARCore WebXR session with Three.js XR binding
   const launchWebXR = async () => {
-    if (!navigator.xr) return;
+    if (!navigator.xr || !rendererRef.current) return;
     try {
+      rendererRef.current.xr.enabled = true;
       const session = await navigator.xr.requestSession('immersive-ar', {
         requiredFeatures: ['hit-test', 'dom-overlay'],
-        domOverlay: { root: containerRef.current }
+        optionalFeatures: ['local-floor', 'bounded-floor'],
+        domOverlay: { root: containerRef.current },
       });
+      await rendererRef.current.xr.setSession(session);
       setXrSessionActive(true);
-      session.addEventListener('end', () => setXrSessionActive(false));
+
+      // WebXR Frame Render Loop
+      rendererRef.current.setAnimationLoop((timestamp, frame) => {
+        if (!xrSessionActive) return;
+        rendererRef.current.render(sceneRef.current, cameraThreeRef.current);
+      });
+
+      session.addEventListener('end', () => {
+        setXrSessionActive(false);
+        if (rendererRef.current) {
+          rendererRef.current.xr.enabled = false;
+          rendererRef.current.setAnimationLoop(null);
+        }
+      });
     } catch (err) {
-      console.warn("WebXR AR session failed:", err);
-      alert("Native ARCore session failed. Continuing in Camera AR mode.");
+      console.warn('WebXR AR session failed:', err);
+      alert('Native ARCore session failed or device is not compatible. Continuing in Camera AR mode.');
     }
   };
 
-  const isArrived = walkProgress >= (route.length - 1);
+  const isArrived = walkProgress >= route.length - 1;
+
 
   return (
     <div className="ar-viewport-container" ref={containerRef}>
@@ -730,8 +1009,12 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
         </div>
       </div>
 
-      {/* 3D Compass Dial Overlay */}
-      <div className="ar-compass-overlay">
+      {/* 3D Compass Dial Overlay (Tap to re-zero heading) */}
+      <div
+        className="ar-compass-overlay"
+        onClick={() => setHeading(0)}
+        title="Tap to re-zero compass heading"
+      >
         <div className="compass-dial" style={{ transform: `rotate(${-heading}deg)` }}>
           <span className="compass-n">N</span>
           <span className="compass-e">E</span>
@@ -759,9 +1042,9 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
           {route.length > 1 && (
             <polyline
               points={route.map((n) => {
-                const start = route[0];
-                const rx = 50 + (n.x - start.x) * 0.1;
-                const ry = 50 + (n.y - start.y) * 0.1;
+                const uPos = getCurrentUserPos();
+                const rx = 50 + (n.x - uPos.x) * 0.12;
+                const ry = 50 + (n.y - uPos.y) * 0.12;
                 return `${rx},${ry}`;
               }).join(" ")}
               fill="none"
@@ -771,18 +1054,66 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
             />
           )}
 
-          {/* Start Node (Blue Dot) */}
-          {route[0] && (
-            <circle cx="20" cy="80" r="4" fill="#0284c7" stroke="#ffffff" strokeWidth="1.5" />
+          {/* Moving Guide Pointer (Blue Dot - moves as we walk) */}
+          {route.length > 0 && (
+            <circle
+              cx={(() => {
+                const uPos = getCurrentUserPos();
+                const pCfg = getPointerConfig(deviceMode === 'tablet');
+                const tProg = Math.min(
+                  route.length - 1,
+                  walkProgress + (walkProgress < route.length - 1 ? pCfg.guideAdvanceOffset : 0)
+                );
+                const idx = Math.min(Math.floor(tProg), route.length - 2);
+                const frac = tProg - idx;
+                const n1 = route[idx];
+                const n2 = route[idx + 1] || n1;
+                const bx = n1.x + (n2.x - n1.x) * frac;
+                return 50 + (bx - uPos.x) * 0.12;
+              })()}
+              cy={(() => {
+                const uPos = getCurrentUserPos();
+                const pCfg = getPointerConfig(deviceMode === 'tablet');
+                const tProg = Math.min(
+                  route.length - 1,
+                  walkProgress + (walkProgress < route.length - 1 ? pCfg.guideAdvanceOffset : 0)
+                );
+                const idx = Math.min(Math.floor(tProg), route.length - 2);
+                const frac = tProg - idx;
+                const n1 = route[idx];
+                const n2 = route[idx + 1] || n1;
+                const by = n1.y + (n2.y - n1.y) * frac;
+                return 50 + (by - uPos.y) * 0.12;
+              })()}
+              r="4.2"
+              fill="#0284c7"
+              stroke="#ffffff"
+              strokeWidth="1.5"
+            />
           )}
 
-          {/* Target Node (Red Dot) */}
+          {/* Destination Node (Red Dot) */}
           {route[route.length - 1] && (
-            <circle cx="80" cy="20" r="5" fill="#f43f5e" stroke="#ffffff" strokeWidth="2" />
+            <circle
+              cx={(() => {
+                const uPos = getCurrentUserPos();
+                const dest = route[route.length - 1];
+                return 50 + (dest.x - uPos.x) * 0.12;
+              })()}
+              cy={(() => {
+                const uPos = getCurrentUserPos();
+                const dest = route[route.length - 1];
+                return 50 + (dest.y - uPos.y) * 0.12;
+              })()}
+              r="4.8"
+              fill="#f43f5e"
+              stroke="#ffffff"
+              strokeWidth="1.8"
+            />
           )}
 
-          {/* Live User Position Dot */}
-          <circle cx="50" cy="50" r="5" fill="#38bdf8" stroke="#ffffff" strokeWidth="2" />
+          {/* Current Live User Position (Center) */}
+          <circle cx="50" cy="50" r="3.5" fill="#38bdf8" stroke="#ffffff" strokeWidth="1.5" />
         </svg>
       </div>
 
@@ -971,7 +1302,7 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
             <button
               type="button"
               className="hud-nav-btn primary"
-              onClick={() => advanceStep(0.12)}
+              onClick={() => advanceStep()}
               title="Step Forward (advances 1 physical stride along pathway)"
             >
               👟 Step Forward
@@ -989,6 +1320,18 @@ function ARNavigation({ routeResult, startNode, onClose, onNodeSelect }) {
                 📡 Sensor
               </button>
             )}
+
+            {/* Pedometer Sensitivity Cycle */}
+            <button
+              type="button"
+              className={`hud-icon-btn ${pedometerSensitivity === 'high' ? 'active' : ''}`}
+              onClick={() => {
+                setPedometerSensitivity((s) => (s === 'normal' ? 'high' : s === 'high' ? 'low' : 'normal'));
+              }}
+              title={`Step Sensitivity: ${pedometerSensitivity.toUpperCase()} (Tap to change: Normal / High / Low)`}
+            >
+              ⚡ {pedometerSensitivity === 'high' ? 'High Sens' : pedometerSensitivity === 'low' ? 'Low Sens' : 'Sens'}
+            </button>
 
             <button
               type="button"
